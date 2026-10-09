@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rollout"
+version = "0.1.0"
+description = "Filesystem SQL model discovery and dependency graphs"
+requires-python = ">=3.12"
+dependencies = ["sqlglot>=28,<30", "typer>=0.16,<1"]
+
+[project.scripts]
+rollout = "rollout.cli:app"
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
