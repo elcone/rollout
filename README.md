@@ -131,3 +131,22 @@ uv run rollout --help
 uv run rollout dag --help
 uv run rollout run --help
 ```
+
+## Tests and coverage
+
+Tests are organized by product responsibility: discovery, SQL validation, table
+lineage, DAGs, rendering, configuration, execution, FULL loading, and CLI integration.
+Shared fixtures in `tests/conftest.py` only write temporary models, build a test DAG,
+and provide a temporary warehouse configuration. Execution tests use real DuckDB.
+Generic SQL examples follow DuckDB's [PIVOT documentation](https://duckdb.org/docs/current/sql/statements/pivot)
+and [set operation documentation](https://duckdb.org/docs/current/sql/query_syntax/setops).
+
+```bash
+uv run pytest
+uv run pytest --cov=rollout --cov-report=term-missing
+uv run pytest --cov=rollout --cov-report=html
+```
+
+Coverage includes branches and uses an 85% minimum when coverage is requested.
+The HTML report is written to `htmlcov/index.html`.
+Missing coverage should guide behavioral review; the percentage is not the goal.
