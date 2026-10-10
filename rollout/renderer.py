@@ -1,33 +1,16 @@
-"""Markdown reports and Mermaid diagrams for SQL model dependencies."""
+import logging
 
-from rollout.dag import DAG, topological_sort
-from rollout.logging import get_logger
+from rollout.dag import DAG
 from rollout.models import ModelId
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def _names(nodes: frozenset[ModelId]) -> str:
-    """Format model identities as a sorted Markdown list.
-
-    Args:
-        nodes: Identities to format.
-
-    Returns:
-        Comma-separated inline code labels, or None as text for an empty set.
-    """
     return ", ".join(f"`{node}`" for node in sorted(nodes)) or "None"
 
 
 def _mermaid_label(value: str) -> str:
-    """Escape text for a quoted Mermaid label.
-
-    Args:
-        value: Raw schema or model label.
-
-    Returns:
-        Text with HTML-sensitive characters escaped and line breaks removed.
-    """
     return (
         value.replace("&", "&amp;")
         .replace('"', "&quot;")
@@ -38,28 +21,8 @@ def _mermaid_label(value: str) -> str:
     )
 
 
-def render_markdown(dag: DAG, order: list[ModelId] | None = None) -> str:
-    """Render a dependency report and a Mermaid flowchart.
-
-    The graph groups nodes by schema, shows model names in rounded nodes,
-    and marks external sources with dashed outlines. Text sections retain
-    qualified identities. This function does not write files.
-
-    Args:
-        dag: Dependency graph to describe.
-        order: Precomputed local model order. If None, compute and validate it.
-            Supplied orders are used as provided, without validation.
-
-    Returns:
-        Markdown with counts, model order, dependencies, and a Mermaid graph.
-
-    Raises:
-        ValueError: The graph contains a cycle when order is not supplied.
-    """
+def render_markdown(dag: DAG) -> str:
     logger.info("Rendering Markdown and Mermaid graph")
-
-    if order is None:
-        order = topological_sort(dag)
 
     lines = [
         "# Rollout DAG",
@@ -73,9 +36,9 @@ def render_markdown(dag: DAG, order: list[ModelId] | None = None) -> str:
         "## Execution order",
         "",
     ]
-    lines.extend(f"{index}. `{node}`" for index, node in enumerate(order, 1))
+    lines.extend(f"{index}. `{node}`" for index, node in enumerate(dag.order, 1))
 
-    if not order:
+    if not dag.order:
         lines.append("No models.")
 
     lines.extend(["", "## Model dependencies", ""])

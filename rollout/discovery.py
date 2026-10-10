@@ -1,31 +1,12 @@
-"""Filesystem discovery of root-level and schema-level SQL models."""
-
+import logging
 from pathlib import Path
 
-from rollout.logging import get_logger
-from rollout.models import Model
+from rollout.models import Model, ModelId
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def discover_models(models_dir: str | Path = "models") -> list[Model]:
-    """Read SQL models from the root and its schema directories.
-
-    Root-level files belong to public; schema/model.sql uses the parent
-    folder as its schema. More deeply nested files are logged at ERROR level
-    and skipped. SQL contents are read without parsing or execution.
-
-    Args:
-        models_dir: Root directory to scan for .sql files.
-
-    Returns:
-        Models in sorted path order, or an empty list if none are found.
-
-    Raises:
-        ValueError: The root is not a directory or contains a public directory.
-        OSError: A discovered file cannot be read.
-        UnicodeDecodeError: A discovered file is not valid UTF-8.
-    """
     logger.info("Discovering SQL models in %s", models_dir)
     root = Path(models_dir)
 
@@ -53,7 +34,9 @@ def discover_models(models_dir: str | Path = "models") -> list[Model]:
 
         schema = parts[0] if len(parts) == 2 else "public"
         logger.debug("Discovered model %s.%s at %s", schema, path.stem, path)
-        models.append(Model(path.stem, schema, path, path.read_text(encoding="utf-8")))
+        models.append(
+            Model(ModelId(schema, path.stem), path, path.read_text(encoding="utf-8"))
+        )
 
     logger.info("Found %d models", len(models))
 
