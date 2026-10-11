@@ -160,15 +160,30 @@ def test_configuration_is_deeply_immutable():
 
 
 def test_sql_quotes_target_and_key_identifiers():
-    from rollout.quality import build_row_count_sql, build_nullness_sql, build_uniqueness_sql
+    from rollout.quality import build_row_count_sql, build_nullness_sql
 
     identity = ModelId('s"x', 't"y')
-    assert build_row_count_sql(identity) == 'SELECT COUNT(*) FROM "s""x"."t""y"'
+    assert build_row_count_sql(identity) == 'SELECT COUNT(*)\nFROM "s""x"."t""y"'
     assert build_nullness_sql(identity, 'c"z') == (
-        'SELECT COUNT(*) FROM "s""x"."t""y" WHERE "c""z" IS NULL')
-    assert build_uniqueness_sql(identity, ('c"z', 'order')) == (
-        'SELECT COUNT(*) FROM (SELECT "c""z", "order" FROM "s""x"."t""y" '
-        'GROUP BY "c""z", "order" HAVING COUNT(*) > 1) AS duplicate_groups')
+        'SELECT COUNT(*)\nFROM "s""x"."t""y"\nWHERE "c""z" IS NULL'
+    )
+
+
+@pytest.mark.parametrize("columns, quoted", [
+    (('c"z',), '"c""z"'),
+    (('c"z', 'order'), '"c""z", "order"'),
+])
+def test_uniqueness_sql_uses_same_quoted_columns_for_grouping(columns, quoted):
+    from rollout.quality import build_uniqueness_sql
+
+    assert build_uniqueness_sql(ModelId('s"x', 't"y'), columns) == (
+        'SELECT COUNT(*)\nFROM (\n'
+        f'    SELECT {quoted}\n'
+        '    FROM "s""x"."t""y"\n'
+        f'    GROUP BY {quoted}\n'
+        '    HAVING COUNT(*) > 1\n'
+        ') AS duplicate_groups'
+    )
 
 
 def test_warning_details_and_names_are_escaped_in_report():

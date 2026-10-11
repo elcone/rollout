@@ -1,7 +1,0 @@
-SELECT count(*)
-FROM (
-    SELECT {columns}
-    FROM {target}
-    GROUP BY {columns}
-    HAVING count(*) > 1
-) AS duplicate_groups

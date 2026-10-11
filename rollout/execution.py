@@ -6,19 +6,15 @@ from pathlib import Path
 from time import perf_counter
 
 import duckdb
-from jinja2 import Environment, PackageLoader
 
 from rollout.config import CheckSeverity, EngineConfig, LoadStrategy
 from rollout.dag import DAG
 from rollout.models import Model, ModelId
 from rollout.parser import validate_delete_predicate
 from rollout.quality import CheckStatus, QualityCheckResult, run_quality_checks
+from rollout.sql_templates import sql_templates
 
 logger = logging.getLogger(__name__)
-_sql_templates = Environment(
-    loader=PackageLoader("rollout", "templates/sql"),
-    autoescape=False,
-)
 
 
 class ExecutionStatus(Enum):
@@ -57,7 +53,7 @@ def build_full_sql(model: Model) -> str:
     schema = _quote_identifier(model.id.schema)
     table = _quote_identifier(model.id.name)
 
-    return _sql_templates.get_template("full.sql.j2").render(
+    return sql_templates.get_template("load_strategies/full.sql.j2").render(
         target=f"{schema}.{table}", model_sql=model.sql
     )
 
@@ -65,7 +61,7 @@ def build_full_sql(model: Model) -> str:
 def build_delete_insert_sql(model: Model, predicate: str) -> str:
     schema = _quote_identifier(model.id.schema)
     table = _quote_identifier(model.id.name)
-    return _sql_templates.get_template("delete_insert.sql.j2").render(
+    return sql_templates.get_template("load_strategies/delete_insert.sql.j2").render(
         target=f"{schema}.{table}", where=predicate, model_sql=model.sql
     )
 
@@ -90,7 +86,7 @@ def build_model_sql(model: Model, *, target_exists: bool = False) -> str:
             return build_delete_insert_sql(model, predicate)
         schema = _quote_identifier(model.id.schema)
         table = _quote_identifier(model.id.name)
-        return _sql_templates.get_template("delete_insert_bootstrap.sql.j2").render(
+        return sql_templates.get_template("load_strategies/delete_insert_bootstrap.sql.j2").render(
             target=f"{schema}.{table}", model_sql=model.sql
         )
 

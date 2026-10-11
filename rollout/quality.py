@@ -2,8 +2,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
-from functools import cache
-from importlib.resources import files
 from numbers import Real
 
 import duckdb
@@ -16,6 +14,7 @@ from rollout.config import (
     UniquenessCheck,
 )
 from rollout.models import Model, ModelId
+from rollout.sql_templates import sql_templates
 
 
 class CheckStatus(Enum):
@@ -40,22 +39,14 @@ def _target(identity: ModelId) -> str:
     return f"{_quote_identifier(identity.schema)}.{_quote_identifier(identity.name)}"
 
 
-@cache
-def _load_quality_template(name: str) -> str:
-    return (
-        files("rollout")
-        .joinpath("templates", "quality", name)
-        .read_text(encoding="utf-8")
-        .strip()
+def build_row_count_sql(identity: ModelId) -> str:
+    return sql_templates.get_template("quality/row_count.sql.j2").render(
+        target=_target(identity)
     )
 
 
-def build_row_count_sql(identity: ModelId) -> str:
-    return _load_quality_template("row_count.sql").format(target=_target(identity))
-
-
 def build_nullness_sql(identity: ModelId, column: str) -> str:
-    return _load_quality_template("nullness.sql").format(
+    return sql_templates.get_template("quality/nullness.sql.j2").render(
         target=_target(identity),
         column=_quote_identifier(column),
     )
@@ -63,7 +54,7 @@ def build_nullness_sql(identity: ModelId, column: str) -> str:
 
 def build_uniqueness_sql(identity: ModelId, columns: tuple[str, ...]) -> str:
     keys = ", ".join(_quote_identifier(column) for column in columns)
-    return _load_quality_template("uniqueness.sql").format(
+    return sql_templates.get_template("quality/uniqueness.sql.j2").render(
         target=_target(identity),
         columns=keys,
     )
