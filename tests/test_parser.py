@@ -79,3 +79,32 @@ def test_parsing_preserves_configuration_and_sql(write_models):
     parsed = parse_models([model])[0]
     assert parsed.config is config
     assert parsed.sql == original
+
+
+@pytest.mark.parametrize("predicate", [
+    "target.id = 1",
+    "target.id = 1 AND (target.number > 2 OR target.number IS NULL)",
+    "target.period IN (SELECT DISTINCT operation_date FROM staging.source)",
+    "EXISTS (SELECT 1 FROM staging.source AS source WHERE target.period = source.operation_date)",
+    "target.operation_date >= current_date - INTERVAL '7 days'",
+])
+def test_delete_predicate_accepts_duckdb_expressions(predicate):
+    from rollout.parser import validate_delete_predicate
+
+    validate_delete_predicate(predicate)
+
+
+@pytest.mark.parametrize("predicate", [
+    "target.id =",
+    "",
+    "target.id = 1; DROP TABLE important",
+    "target.id = 1; DELETE FROM other_table",
+    "target.id = 1; SELECT 2",
+    "target.id = 1 ORDER BY target.id",
+    "target.id = 1 UNION SELECT 2",
+])
+def test_delete_predicate_rejects_invalid_structure(predicate):
+    from rollout.parser import validate_delete_predicate
+
+    with pytest.raises(ValueError, match="Invalid delete_insert.where"):
+        validate_delete_predicate(predicate)

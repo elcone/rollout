@@ -2,7 +2,14 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 
 class EngineConfig(BaseModel):
@@ -13,6 +20,7 @@ class EngineConfig(BaseModel):
 
 class LoadStrategy(Enum):
     FULL = "FULL"
+    DELETE_INSERT = "DELETE_INSERT"
 
 
 class CheckSeverity(Enum):
@@ -55,8 +63,33 @@ QualityCheck = Annotated[
 ]
 
 
+class DeleteInsertConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    where: str
+
+    @field_validator("where")
+    @classmethod
+    def require_nonempty_predicate(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("delete_insert.where must not be empty")
+        return value
+
+
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     load_strategy: LoadStrategy = LoadStrategy.FULL
+    delete_insert: DeleteInsertConfig | None = None
     quality: tuple[QualityCheck, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_strategy_config(self) -> "ModelConfig":
+        if self.load_strategy is LoadStrategy.FULL and self.delete_insert is not None:
+            raise ValueError("FULL does not allow delete_insert configuration")
+        if (
+            self.load_strategy is LoadStrategy.DELETE_INSERT
+            and self.delete_insert is None
+        ):
+            raise ValueError("DELETE_INSERT requires delete_insert configuration")
+        return self

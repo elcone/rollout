@@ -6,13 +6,19 @@ from pathlib import Path
 from time import perf_counter
 
 import duckdb
+from jinja2 import Environment, PackageLoader
 
 from rollout.config import CheckSeverity, EngineConfig, LoadStrategy
 from rollout.dag import DAG
 from rollout.models import Model, ModelId
+from rollout.parser import validate_delete_predicate
 from rollout.quality import CheckStatus, QualityCheckResult, run_quality_checks
 
 logger = logging.getLogger(__name__)
+_sql_templates = Environment(
+    loader=PackageLoader("rollout", "templates/sql"),
+    autoescape=False,
+)
 
 
 class ExecutionStatus(Enum):
@@ -51,12 +57,42 @@ def build_full_sql(model: Model) -> str:
     schema = _quote_identifier(model.id.schema)
     table = _quote_identifier(model.id.name)
 
-    return f"CREATE OR REPLACE TABLE {schema}.{table} AS\n{model.sql}"
+    return _sql_templates.get_template("full.sql.j2").render(
+        target=f"{schema}.{table}", model_sql=model.sql
+    )
 
 
-def build_model_sql(model: Model) -> str:
+def build_delete_insert_sql(model: Model, predicate: str) -> str:
+    schema = _quote_identifier(model.id.schema)
+    table = _quote_identifier(model.id.name)
+    return _sql_templates.get_template("delete_insert.sql.j2").render(
+        target=f"{schema}.{table}", where=predicate, model_sql=model.sql
+    )
+
+
+def target_table_exists(connection: duckdb.DuckDBPyConnection, model: Model) -> bool:
+    return connection.execute(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+        "WHERE table_catalog = current_database() AND table_schema = ? "
+        "AND table_name = ? AND table_type = 'BASE TABLE')",
+        [model.id.schema, model.id.name],
+    ).fetchone()[0]
+
+
+def build_model_sql(model: Model, *, target_exists: bool = False) -> str:
     if model.config.load_strategy is LoadStrategy.FULL:
         return build_full_sql(model)
+
+    if model.config.load_strategy is LoadStrategy.DELETE_INSERT:
+        predicate = model.config.delete_insert.where.strip()
+        validate_delete_predicate(predicate)
+        if target_exists:
+            return build_delete_insert_sql(model, predicate)
+        schema = _quote_identifier(model.id.schema)
+        table = _quote_identifier(model.id.name)
+        return _sql_templates.get_template("delete_insert_bootstrap.sql.j2").render(
+            target=f"{schema}.{table}", model_sql=model.sql
+        )
 
     raise ValueError(
         f"Unsupported load strategy for {model.id}: {model.config.load_strategy}"
@@ -175,7 +211,12 @@ def execute_models(
                 continue
 
             model = dag.models[identity]
-            sql = build_model_sql(model)
+            if model.config.load_strategy is LoadStrategy.DELETE_INSERT:
+                sql = build_model_sql(
+                    model, target_exists=target_table_exists(connection, model)
+                )
+            else:
+                sql = build_model_sql(model)
             sql_path = run_dir / identity.schema / f"{identity.name}.sql"
             save_generated_sql(sql, sql_path)
             results[identity] = execute_model(connection, model, sql)

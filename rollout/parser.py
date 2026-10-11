@@ -12,6 +12,27 @@ from rollout.models import Model, ModelId
 logger = logging.getLogger(__name__)
 
 
+def validate_delete_predicate(predicate: str) -> None:
+    wrapper = "SELECT 1 FROM __rollout_target__ AS target"
+    try:
+        statements = sqlglot.parse(f"{wrapper} WHERE {predicate}", read="duckdb")
+        if len(statements) != 1:
+            raise ValueError("expected exactly one SQL statement")
+        statement = statements[0]
+        if not isinstance(statement, exp.Select) or not statement.args.get("where"):
+            raise ValueError("expected a WHERE expression in a SELECT")
+        without_where = statement.copy()
+        without_where.set("where", None)
+        if without_where != sqlglot.parse_one(wrapper, read="duckdb"):
+            raise ValueError("predicate must contain only a WHERE expression")
+        if any(
+            isinstance(node, (exp.DML, exp.DDL, exp.Into)) for node in statement.walk()
+        ):
+            raise ValueError("predicate must not contain data modifications")
+    except (SqlglotError, ValueError) as exc:
+        raise ValueError(f"Invalid delete_insert.where: {exc}") from exc
+
+
 def extract_dependencies(sql: str) -> frozenset[ModelId] | None:
     statements = [
         statement

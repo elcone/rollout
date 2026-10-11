@@ -1,0 +1,5 @@
+DELETE FROM {{ target }} AS target
+WHERE {{ where }};
+
+INSERT INTO {{ target }}
+{{ model_sql }}
