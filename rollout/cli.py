@@ -89,10 +89,11 @@ def run(
     ] = None,
 ) -> None:
     try:
+        engine_config = EngineConfig()
         models = discover_models(models_dir)
         models = parse_models(models)
         dag = build_dag(models)
-        results = execute_models(dag, EngineConfig())
+        results = execute_models(dag, engine_config)
 
     except (ValueError, OSError, duckdb.Error) as exc:
         logger.error("Error: %s", exc)
@@ -124,7 +125,7 @@ def run(
     report_path = output
     if report_path is None:
         filename = generated_at.strftime("%Y%m%dT%H%M%S.%fZ.md")
-        report_path = EngineConfig().warehouse_path.parent / "runs" / filename
+        report_path = engine_config.warehouse_path.parent / "runs" / filename
     markdown = render_execution_markdown(dag, results, generated_at=generated_at)
     try:
         if output is None:
