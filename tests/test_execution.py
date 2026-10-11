@@ -21,6 +21,10 @@ def test_success_in_stored_order(model_dag, engine_config, monkeypatch):
     results = execute_models(dag, engine_config)
     assert list(results) == dag.order
     assert all(result.status is ExecutionStatus.SUCCESS for result in results.values())
+    assert all(
+        isinstance(result.duration, (int, float)) and result.duration >= 0
+        for result in results.values()
+    )
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         assert connection.execute("SELECT * FROM silver.report").fetchall() == [(2,)]
 
@@ -53,6 +57,13 @@ def test_failed_branch_blocks_descendants_and_independent_branch_continues(
         result for result in results.values() if result.status is ExecutionStatus.FAILED
     )
     assert "missing" in failed.error
+    for result in results.values():
+        if result.status is ExecutionStatus.SKIPPED:
+            assert result.duration is None
+            assert result.error is None
+        else:
+            assert isinstance(result.duration, (int, float))
+            assert result.duration >= 0
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         assert connection.execute("SELECT * FROM independent.report").fetchall() == [
             (42,)

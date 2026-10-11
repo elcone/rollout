@@ -57,6 +57,17 @@ Execution logs start with the model count and warehouse path.
 The console summary uses green for success, red for failure, and yellow for skipped models.
 Colors are automatically omitted when output is redirected.
 
+After execution, Rollout saves a Markdown report in `.rollout/runs/` using a UTC
+filename such as `20261011T000332.123456Z.md`. Reports include the generation time,
+summary, root failures, model results, full failure diagnostics, and execution lineage.
+Mermaid nodes show execution status and duration; skipped models have no duration.
+
+Use `rollout run --output run.md` (or `-o run.md`) to save to an explicit path instead.
+Automatic save failures emit a warning and preserve the execution exit status.
+A failure writing an explicitly requested output returns a CLI error; model results
+remain unchanged.
+
+
 ## Model discovery flow
 
 Discovery starts at the selected directory and scans `.sql` files in sorted path order.

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
+from time import perf_counter
 
 import duckdb
 
@@ -23,6 +24,7 @@ class ExecutionStatus(Enum):
 class ModelResult:
     status: ExecutionStatus
     error: str | None = None
+    duration: float | None = None
 
 
 def _quote_identifier(name: str) -> str:
@@ -85,6 +87,7 @@ def execute_model(
         model.id,
         ", ".join(map(str, sorted(model.dependencies))) or "None",
     )
+    started = perf_counter()
     connection.execute("BEGIN TRANSACTION")
     logger.debug("Transaction started for %s", model.id)
 
@@ -94,14 +97,16 @@ def execute_model(
 
     except duckdb.Error as exc:
         connection.execute("ROLLBACK")
+        duration = perf_counter() - started
         logger.debug("Transaction rolled back for %s", model.id)
         logger.error("Failed %s: %s", model.id, exc)
-        return ModelResult(ExecutionStatus.FAILED, str(exc))
+        return ModelResult(ExecutionStatus.FAILED, str(exc), duration)
 
     else:
+        duration = perf_counter() - started
         logger.debug("Transaction committed for %s", model.id)
         logger.info("Materialized %s", model.id)
-        return ModelResult(ExecutionStatus.SUCCESS)
+        return ModelResult(ExecutionStatus.SUCCESS, duration=duration)
 
 
 def execute_models(

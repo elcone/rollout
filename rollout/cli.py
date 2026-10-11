@@ -1,5 +1,6 @@
 import logging
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -11,7 +12,7 @@ from rollout.dag import build_dag
 from rollout.discovery import discover_models
 from rollout.execution import ExecutionStatus, execute_models
 from rollout.parser import parse_models
-from rollout.renderer import render_markdown
+from rollout.renderer import render_execution_markdown, render_markdown
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(help="Inspect SQL dependency DAGs and execute models in DuckDB.")
@@ -78,6 +79,14 @@ def run(
     models_dir: Annotated[
         Path, typer.Option("--models-dir", help="Directory containing SQL models.")
     ] = Path("models"),
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Save the execution report here instead of .rollout/runs/.",
+        ),
+    ] = None,
 ) -> None:
     try:
         models = discover_models(models_dir)
@@ -110,6 +119,26 @@ def run(
     ):
         count = sum(result.status is status for result in results.values())
         typer.secho(f"{count} {label}", fg=colors[status])
+
+    generated_at = datetime.now(UTC)
+    report_path = output
+    if report_path is None:
+        filename = generated_at.strftime("%Y%m%dT%H%M%S.%fZ.md")
+        report_path = EngineConfig().warehouse_path.parent / "runs" / filename
+    markdown = render_execution_markdown(dag, results, generated_at=generated_at)
+    try:
+        if output is None:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            # Keep earlier reports even if a timestamp collision occurs.
+            with report_path.open("x", encoding="utf-8") as report_file:
+                report_file.write(markdown)
+        else:
+            report_path.write_text(markdown, encoding="utf-8")
+        logger.info("Wrote execution report to %s", report_path)
+    except OSError as exc:
+        logger.warning("Could not save execution report to %s: %s", report_path, exc)
+        if output is not None:
+            raise typer.Exit(code=1) from exc
 
     if any(result.status is ExecutionStatus.FAILED for result in results.values()):
         raise typer.Exit(code=1)
