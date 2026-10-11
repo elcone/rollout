@@ -130,7 +130,7 @@ def test_run_output_report_after_execution(write_models, tmp_path, monkeypatch, 
     if fails:
         assert "| broken.orders | FAILED |" in report
         assert "missing" in report
-        assert "| gold.report | SKIPPED | — |  |" in report
+        assert "| gold.report | SKIPPED | — | — |  |" in report
 
 
 def test_run_report_write_failure_returns_one_after_execution(write_models, tmp_path, monkeypatch):

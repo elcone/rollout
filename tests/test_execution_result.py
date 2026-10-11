@@ -23,9 +23,9 @@ def test_mixed_results_order_summary_and_lineage(model_dag):
     assert "- Successful: 1\n- Failed: 1\n- Skipped: 1" in report
     rows = [line for line in report.splitlines() if line.startswith("| ")][2:]
     assert rows == [
-        "| bronze.orders | SUCCESS | 0.13s |  |",
-        "| silver.orders | FAILED | 0.08s | See failure details |",
-        "| gold.sales | SKIPPED | — |  |",
+        "| bronze.orders | SUCCESS | 0.13s | — |  |",
+        "| silver.orders | FAILED | 0.08s | — | See failure details |",
+        "| gold.sales | SKIPPED | — | — |  |",
     ]
     groups = dict(re.findall(r'subgraph \w+\["([^"]+)"\]\n(.*?)    end', report, re.S))
     ids = {
@@ -65,7 +65,7 @@ def test_error_preserves_markdown_table(model_dag):
             ),
         },
     )
-    assert "| FAILED | 0.00s | See failure details |" in report
+    assert "| FAILED | 0.00s | — | See failure details |" in report
     assert "    Error | <value>\n    next line" in report
 
 

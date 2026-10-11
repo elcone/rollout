@@ -1,9 +1,31 @@
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 
+import yaml
+
+from rollout.config import ModelConfig
 from rollout.models import Model, ModelId
 
 logger = logging.getLogger(__name__)
+
+
+def _load_model_config(path: Path) -> ModelConfig:
+    if not path.exists():
+        return ModelConfig()
+
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if data is None:
+            data = {}
+
+        if not isinstance(data, Mapping):
+            raise ValueError("Expected a YAML mapping/object")
+
+        return ModelConfig(**data)
+
+    except (OSError, UnicodeError, yaml.YAMLError, TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid model configuration in {path}: {exc}") from exc
 
 
 def discover_models(models_dir: str | Path = "models") -> list[Model]:
@@ -35,7 +57,12 @@ def discover_models(models_dir: str | Path = "models") -> list[Model]:
         schema = parts[0] if len(parts) == 2 else "public"
         logger.debug("Discovered model %s.%s at %s", schema, path.stem, path)
         models.append(
-            Model(ModelId(schema, path.stem), path, path.read_text(encoding="utf-8"))
+            Model(
+                ModelId(schema, path.stem),
+                path,
+                path.read_text(encoding="utf-8"),
+                config=_load_model_config(path.with_suffix(".yaml")),
+            )
         )
 
     logger.info("Found %d models", len(models))

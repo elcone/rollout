@@ -7,9 +7,10 @@ from time import perf_counter
 
 import duckdb
 
-from rollout.config import EngineConfig, LoadStrategy
+from rollout.config import CheckSeverity, EngineConfig, LoadStrategy
 from rollout.dag import DAG
 from rollout.models import Model, ModelId
+from rollout.quality import CheckStatus, QualityCheckResult, run_quality_checks
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ class ModelResult:
     status: ExecutionStatus
     error: str | None = None
     duration: float | None = None
+    quality_results: tuple[QualityCheckResult, ...] = ()
 
 
 def _quote_identifier(name: str) -> str:
@@ -91,22 +93,47 @@ def execute_model(
     connection.execute("BEGIN TRANSACTION")
     logger.debug("Transaction started for %s", model.id)
 
+    quality_results: list[QualityCheckResult] = []
     try:
         connection.execute(sql)
+        quality_results.extend(run_quality_checks(connection, model))
+        failures = [
+            result
+            for result in quality_results
+            if result.status is CheckStatus.FAIL
+            and result.severity is CheckSeverity.ERROR
+        ]
+        if failures:
+            raise ValueError(
+                "Quality rule failed: "
+                + "; ".join(
+                    f"{result.check.type}: observed {result.observed_value}, "
+                    f"expected {result.check}"
+                    for result in failures
+                )
+            )
         connection.execute("COMMIT")
 
-    except duckdb.Error as exc:
+    except (duckdb.Error, ValueError) as exc:
         connection.execute("ROLLBACK")
         duration = perf_counter() - started
         logger.debug("Transaction rolled back for %s", model.id)
         logger.error("Failed %s: %s", model.id, exc)
-        return ModelResult(ExecutionStatus.FAILED, str(exc), duration)
+
+        return ModelResult(
+            ExecutionStatus.FAILED, str(exc), duration, tuple(quality_results)
+        )
 
     else:
         duration = perf_counter() - started
         logger.debug("Transaction committed for %s", model.id)
         logger.info("Materialized %s", model.id)
-        return ModelResult(ExecutionStatus.SUCCESS, duration=duration)
+
+        return ModelResult(
+            ExecutionStatus.SUCCESS,
+            duration=duration,
+            quality_results=tuple(quality_results),
+        )
 
 
 def execute_models(

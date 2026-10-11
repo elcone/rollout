@@ -4,9 +4,11 @@ from html import escape
 
 from jinja2 import Environment, PackageLoader
 
+from rollout.config import NullnessCheck, RowCountCheck
 from rollout.dag import DAG
 from rollout.execution import ExecutionStatus, ModelResult
 from rollout.models import ModelId
+from rollout.quality import CheckStatus
 
 logger = logging.getLogger(__name__)
 _templates = Environment(
@@ -16,6 +18,17 @@ _templates = Environment(
     lstrip_blocks=True,
     keep_trailing_newline=True,
 )
+
+
+def _quality_summary(result: ModelResult) -> str:
+    counts = {"PASS": 0, "WARNING": 0, "ERROR": 0}
+    for check in result.quality_results:
+        label = "PASS" if check.status is CheckStatus.PASS else check.severity.value
+        counts[label] += 1
+    return (
+        " · ".join(f"{count} {label}" for label, count in counts.items() if count)
+        or "—"
+    )
 
 
 def _names(nodes: frozenset[ModelId]) -> str:
@@ -81,6 +94,11 @@ def _mermaid_lines(
                 if result.duration is not None:
                     status += f" · {result.duration:.2f}s"
                 label += f"<br/>{status}"
+                if (
+                    result.quality_results
+                    and result.status is not ExecutionStatus.SKIPPED
+                ):
+                    label += f"<br/>Quality: {_quality_summary(result)}"
             lines.append(f'        {ids[node]}("{label}")')
         lines.append("    end")
 
@@ -138,6 +156,7 @@ def render_execution_markdown(
             {
                 "name": _table_cell(str(node)),
                 "status": result.status.value,
+                "quality": _quality_summary(result),
                 "duration": f"{result.duration:.2f}s"
                 if result.duration is not None
                 else "—",
@@ -146,6 +165,30 @@ def render_execution_markdown(
                 else "",
             }
         )
+    quality_details = []
+    for node in dag.order:
+        for result in results[node].quality_results:
+            check = result.check
+            name = check.type
+            if isinstance(check, NullnessCheck):
+                name += f"({check.column})"
+            elif not isinstance(check, RowCountCheck):
+                name += f"({', '.join(check.columns)})"
+            expected = (
+                f">= {check.min}"
+                if isinstance(check, RowCountCheck)
+                else f"<= {check.max}"
+            )
+            quality_details.append(
+                {
+                    "model": _table_cell(str(node)),
+                    "check": _table_cell(name),
+                    "observed": str(result.observed_value),
+                    "expected": expected,
+                    "status": result.status.value,
+                    "severity": result.severity.value,
+                }
+            )
     failures = []
     for node in failed:
         error = results[node].error or "No error message available."
@@ -173,5 +216,6 @@ def render_execution_markdown(
         summary=summary,
         models=models,
         failures=failures,
+        quality_details=quality_details,
         mermaid="\n".join(mermaid_lines),
     )

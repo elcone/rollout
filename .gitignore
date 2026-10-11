@@ -11,3 +11,4 @@ milestones/
 .coverage
 .coverage.*
 htmlcov/
+.archify/
