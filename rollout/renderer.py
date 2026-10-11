@@ -12,7 +12,7 @@ from rollout.quality import CheckStatus
 
 logger = logging.getLogger(__name__)
 _templates = Environment(
-    loader=PackageLoader("rollout", "templates"),
+    loader=PackageLoader("rollout", "templates/markdown"),
     autoescape=False,
     trim_blocks=True,
     lstrip_blocks=True,
