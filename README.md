@@ -32,7 +32,7 @@ Failed or skipped local dependencies cause a model to be skipped, even if an old
 
 Use `rollout --verbose run` to see each model's file, dependencies, generated SQL path, transaction outcome, and blocking dependencies when skipped. The SQL body is not printed in verbose logs. Execution logs start with the model count and warehouse path. The console summary uses green for success, red for failure, and yellow for skipped models. Colors are automatically omitted when output is redirected.
 
-After execution, Rollout saves a Markdown report in `.rollout/runs/` using a UTC filename such as `20261011T000332.123456Z.md`. Reports include the generation time, summary, root failures, model results, full failure diagnostics, and execution lineage. Mermaid nodes show execution status and duration; skipped models have no duration.
+After execution, Rollout saves a Markdown report in `.rollout/runs/` using a UTC filename such as `20261011T000332.123456Z.md`. Reports include the UTC run start and finish times, total elapsed execution duration, summary, root failures, model results, full failure diagnostics, and execution lineage. Mermaid nodes show execution status and duration; skipped models have no duration.
 
 Use `rollout run --output run.md` (or `-o run.md`) to save to an explicit path instead. Automatic save failures emit a warning and preserve the execution exit status. A failure writing an explicitly requested output returns a CLI error; model results remain unchanged.
 

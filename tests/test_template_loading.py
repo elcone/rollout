@@ -38,7 +38,13 @@ with duckdb.connect() as connection:
     assert connection.execute(build_nullness_sql(identity, "number")).fetchone() == (0,)
     assert connection.execute(build_uniqueness_sql(identity, ("number",))).fetchone() == (0,)
 print(render_markdown(build_dag([])))
-print(render_execution_markdown(build_dag([]), {}))
+from datetime import UTC, datetime
+print(render_execution_markdown(
+    build_dag([]), {},
+    started_at=datetime(2026, 10, 11, 23, 13, 24, tzinfo=UTC),
+    finished_at=datetime(2026, 10, 11, 23, 13, 29, tzinfo=UTC),
+    total_duration=5.42,
+))
 """
     result = subprocess.run(
         [sys.executable, "-I", "-c", script, str(archive)],

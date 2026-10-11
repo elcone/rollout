@@ -133,11 +133,10 @@ def render_execution_markdown(
     dag: DAG,
     results: dict[ModelId, ModelResult],
     *,
-    generated_at: datetime | None = None,
+    started_at: datetime,
+    finished_at: datetime,
+    total_duration: float,
 ) -> str:
-    if generated_at is None:
-        generated_at = datetime.now(UTC)
-    timestamp = generated_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     failed = [
         node for node in dag.order if results[node].status is ExecutionStatus.FAILED
     ]
@@ -212,7 +211,9 @@ def render_execution_markdown(
         mermaid_lines.append(f"    class {ids[node]} {results[node].status.value}")
 
     return _templates.get_template("execution.md.j2").render(
-        generated_at=timestamp,
+        started_at=started_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        finished_at=finished_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        total_duration=f"{total_duration:.2f}s",
         summary=summary,
         models=models,
         failures=failures,

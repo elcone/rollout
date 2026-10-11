@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,6 +13,12 @@ from rollout.models import Model, ModelId
 from rollout.quality import CheckStatus, evaluate_check, observe_numeric_scalar
 from rollout.renderer import render_execution_markdown
 
+
+RUN_TIMING = {
+    "started_at": datetime(2026, 10, 11, 23, 13, 24, tzinfo=UTC),
+    "finished_at": datetime(2026, 10, 11, 23, 13, 29, tzinfo=UTC),
+    "total_duration": 5.42,
+}
 
 def model(sql, checks):
     return Model(ModelId("main", "data"), Path("data.sql"), sql,
@@ -101,7 +108,7 @@ def test_transactions_dependents_and_report(engine_config, severity):
     assert check.severity is CheckSeverity(severity)
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         assert connection.execute("SELECT * FROM main.data").fetchall() == [(2 if warning else 99,)]
-    report = render_execution_markdown(dag, results)
+    report = render_execution_markdown(dag, results, **RUN_TIMING)
     assert f"1 PASS · 1 {severity}" in report
     assert "## Quality details" in report
     assert f"| main.data | row_count | 1 | >= 2 | FAIL | {severity} |" in report
@@ -191,7 +198,7 @@ def test_warning_details_and_names_are_escaped_in_report():
         dict(type="nullness", column="a|<b>", max=0, severity="WARNING")])
     with duckdb.connect() as connection:
         result = execute_model(connection, item, build_model_sql(item))
-    report = render_execution_markdown(build_dag([item]), {item.id: result})
+    report = render_execution_markdown(build_dag([item]), {item.id: result}, **RUN_TIMING)
     assert "| main.data | nullness(a&#124;&lt;b&gt;) | 1 | <= 0 | FAIL | WARNING |" in report
     assert "| 1 WARNING |" in report
     assert "<br/>Quality: 1 WARNING" in report

@@ -2,6 +2,7 @@ import logging
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Annotated
 
 import duckdb
@@ -93,7 +94,11 @@ def run(
         models = discover_models(models_dir)
         models = parse_models(models)
         dag = build_dag(models)
+        started_at = datetime.now(UTC)
+        started = perf_counter()
         results = execute_models(dag, engine_config)
+        finished_at = datetime.now(UTC)
+        total_duration = perf_counter() - started
 
     except (ValueError, OSError, duckdb.Error) as exc:
         logger.error("Error: %s", exc)
@@ -121,12 +126,17 @@ def run(
         count = sum(result.status is status for result in results.values())
         typer.secho(f"{count} {label}", fg=colors[status])
 
-    generated_at = datetime.now(UTC)
     report_path = output
     if report_path is None:
-        filename = generated_at.strftime("%Y%m%dT%H%M%S.%fZ.md")
+        filename = finished_at.strftime("%Y%m%dT%H%M%S.%fZ.md")
         report_path = engine_config.warehouse_path.parent / "runs" / filename
-    markdown = render_execution_markdown(dag, results, generated_at=generated_at)
+    markdown = render_execution_markdown(
+        dag,
+        results,
+        started_at=started_at,
+        finished_at=finished_at,
+        total_duration=total_duration,
+    )
     try:
         if output is None:
             report_path.parent.mkdir(parents=True, exist_ok=True)

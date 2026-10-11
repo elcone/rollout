@@ -155,7 +155,10 @@ def test_automatic_report_location_filename_and_previous_runs(write_models, tmp_
     content = first.read_text()
     assert re.fullmatch(r"\d{8}T\d{6}\.\d{6}Z.md", first.name)
     timestamp = datetime.strptime(first.name, "%Y%m%dT%H%M%S.%fZ.md")
-    assert f"Generated at: {timestamp:%Y-%m-%d %H:%M:%S} UTC" in content
+    assert f"Finished at: {timestamp:%Y-%m-%d %H:%M:%S} UTC" in content
+    assert "Started at:" in content
+    assert re.search(r"^Duration: \d+\.\d{2}s$", content, re.M)
+    assert "Generated at" not in content
     assert runner.invoke(app, ["run"]).exit_code == 0
     assert len(list(first.parent.glob("*.md"))) == 2
     assert first.read_text() == content
