@@ -2,11 +2,20 @@ import logging
 from datetime import UTC, datetime
 from html import escape
 
+from jinja2 import Environment, PackageLoader
+
 from rollout.dag import DAG
 from rollout.execution import ExecutionStatus, ModelResult
 from rollout.models import ModelId
 
 logger = logging.getLogger(__name__)
+_templates = Environment(
+    loader=PackageLoader("rollout", "templates"),
+    autoescape=False,
+    trim_blocks=True,
+    lstrip_blocks=True,
+    keep_trailing_newline=True,
+)
 
 
 def _names(nodes: frozenset[ModelId]) -> str:
@@ -27,43 +36,25 @@ def _mermaid_label(value: str) -> str:
 def render_markdown(dag: DAG) -> str:
     logger.info("Rendering Markdown and Mermaid graph")
 
-    lines = [
-        "# Rollout DAG",
-        "",
-        "## Project summary",
-        "",
-        f"- Models: {len(dag.models)}",
-        f"- Dependency relationships: {len(dag.edges)}",
-        f"- External dependencies: {len(dag.external_nodes)}",
-        "",
-        "## Execution order",
-        "",
+    models = [
+        {
+            "name": str(node),
+            "dependencies": _names(dag.dependencies[node]),
+            "dependents": _names(dag.dependents[node]),
+            "external_dependencies": _names(
+                dag.dependencies[node] & dag.external_nodes
+            ),
+        }
+        for node in sorted(dag.models)
     ]
-    lines.extend(f"{index}. `{node}`" for index, node in enumerate(dag.order, 1))
-
-    if not dag.order:
-        lines.append("No models.")
-
-    lines.extend(["", "## Model dependencies", ""])
-
-    for node in sorted(dag.models):
-        lines.extend(
-            [
-                f"### `{node}`",
-                "",
-                f"- Dependencies: {_names(dag.dependencies[node])}",
-                f"- Dependents: {_names(dag.dependents[node])}",
-                f"- External dependencies: {_names(dag.dependencies[node] & dag.external_nodes)}",
-                "",
-            ]
-        )
-
-    lines.extend(["## Mermaid graph", "", "```mermaid", "flowchart LR"])
-    lines.extend(_mermaid_lines(dag))
-
-    lines.extend(["```", ""])
-
-    return "\n".join(lines)
+    return _templates.get_template("dag.md.j2").render(
+        model_count=len(dag.models),
+        dependency_count=len(dag.edges),
+        external_count=len(dag.external_nodes),
+        execution_order=[str(node) for node in dag.order],
+        models=models,
+        mermaid="\n".join(["flowchart LR", *_mermaid_lines(dag)]),
+    )
 
 
 def _mermaid_ids(dag: DAG) -> dict[ModelId, str]:
@@ -132,67 +123,41 @@ def render_execution_markdown(
     failed = [
         node for node in dag.order if results[node].status is ExecutionStatus.FAILED
     ]
-    lines = [
-        "# Rollout execution",
-        "",
-        f"Generated at: {timestamp}",
-        "",
-        "## Summary",
-        "",
+    summary = [
+        (label, sum(results[node].status is status for node in dag.order))
+        for status, label in (
+            (ExecutionStatus.SUCCESS, "Successful"),
+            (ExecutionStatus.FAILED, "Failed"),
+            (ExecutionStatus.SKIPPED, "Skipped"),
+        )
     ]
-    for status, label in (
-        (ExecutionStatus.SUCCESS, "Successful"),
-        (ExecutionStatus.FAILED, "Failed"),
-        (ExecutionStatus.SKIPPED, "Skipped"),
-    ):
-        count = sum(results[node].status is status for node in dag.order)
-        lines.append(f"- {label}: {count}")
-
-    lines.extend(["", "## Root failures", ""])
-    lines.extend(f"- {node}" for node in failed)
-    if not failed:
-        lines.append("None")
-
-    lines.extend(
-        [
-            "",
-            "## Model results",
-            "",
-            "| Model | Status | Duration | Error |",
-            "| --- | --- | ---: | --- |",
-        ]
-    )
+    models = []
     for node in dag.order:
         result = results[node]
-        duration = f"{result.duration:.2f}s" if result.duration is not None else "—"
-        error = "See failure details" if result.status is ExecutionStatus.FAILED else ""
-        lines.append(
-            f"| {_table_cell(str(node))} | {result.status.value} | {duration} | {error} |"
+        models.append(
+            {
+                "name": _table_cell(str(node)),
+                "status": result.status.value,
+                "duration": f"{result.duration:.2f}s"
+                if result.duration is not None
+                else "—",
+                "error": "See failure details"
+                if result.status is ExecutionStatus.FAILED
+                else "",
+            }
+        )
+    failures = []
+    for node in failed:
+        error = results[node].error or "No error message available."
+        failures.append(
+            {
+                "name": str(node),
+                "error": "\n".join(f"    {line}" for line in error.splitlines()),
+            }
         )
 
-    lines.extend(["", "## Failure details", ""])
-    if not failed:
-        lines.append("None")
-    for node in failed:
-        lines.extend([f"### {node}", ""])
-        # Indented code preserves multiline DuckDB diagnostics verbatim.
-        error = results[node].error or "No error message available."
-        lines.extend(f"    {line}" for line in error.splitlines())
-        lines.append("")
-
-    lines.extend(
-        [
-            "",
-            "## Execution lineage",
-            "",
-            "Green: SUCCESS · Red: FAILED · Yellow: SKIPPED · Dashed: external dependency",
-            "",
-            "```mermaid",
-            "flowchart LR",
-        ]
-    )
-    lines.extend(_mermaid_lines(dag, results))
-    lines.extend(
+    mermaid_lines = ["flowchart LR", *_mermaid_lines(dag, results)]
+    mermaid_lines.extend(
         [
             "    classDef SUCCESS fill:#dcfce7,stroke:#15803d,color:#14532d",
             "    classDef FAILED fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d",
@@ -201,6 +166,12 @@ def render_execution_markdown(
     )
     ids = _mermaid_ids(dag)
     for node in dag.order:
-        lines.append(f"    class {ids[node]} {results[node].status.value}")
-    lines.extend(["```", ""])
-    return "\n".join(lines)
+        mermaid_lines.append(f"    class {ids[node]} {results[node].status.value}")
+
+    return _templates.get_template("execution.md.j2").render(
+        generated_at=timestamp,
+        summary=summary,
+        models=models,
+        failures=failures,
+        mermaid="\n".join(mermaid_lines),
+    )

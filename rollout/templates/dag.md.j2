@@ -1,0 +1,31 @@
+# Rollout DAG
+
+## Project summary
+
+- Models: {{ model_count }}
+- Dependency relationships: {{ dependency_count }}
+- External dependencies: {{ external_count }}
+
+## Execution order
+
+{% for model in execution_order %}
+{{ loop.index }}. `{{ model }}`
+{% else %}
+No models.
+{% endfor %}
+
+## Model dependencies
+
+{% for model in models %}
+### `{{ model.name }}`
+
+- Dependencies: {{ model.dependencies }}
+- Dependents: {{ model.dependents }}
+- External dependencies: {{ model.external_dependencies }}
+
+{% endfor %}
+## Mermaid graph
+
+```mermaid
+{{ mermaid }}
+```

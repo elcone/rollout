@@ -1,0 +1,44 @@
+# Rollout execution
+
+Generated at: {{ generated_at }}
+
+## Summary
+
+{% for label, count in summary %}
+- {{ label }}: {{ count }}
+{% endfor %}
+
+## Root failures
+
+{% for failure in failures %}
+- {{ failure.name }}
+{% else %}
+None
+{% endfor %}
+
+## Model results
+
+| Model | Status | Duration | Error |
+| --- | --- | ---: | --- |
+{% for model in models %}
+| {{ model.name }} | {{ model.status }} | {{ model.duration }} | {{ model.error }} |
+{% endfor %}
+
+## Failure details
+
+{% for failure in failures %}
+### {{ failure.name }}
+
+{{ failure.error }}
+
+{% else %}
+None
+{% endfor %}
+
+## Execution lineage
+
+Green: SUCCESS · Red: FAILED · Yellow: SKIPPED · Dashed: external dependency
+
+```mermaid
+{{ mermaid }}
+```
