@@ -56,7 +56,11 @@ def test_execution_uses_model_sql_selection(model_dag, engine_config, monkeypatc
         calls.append(model.id)
         return select_sql(model)
 
+    def unexpected_existence_check(connection, model):
+        pytest.fail("FULL must not check target existence")
+
     monkeypatch.setattr(execution, "build_model_sql", track_selection)
+    monkeypatch.setattr(execution, "target_table_exists", unexpected_existence_check)
     results = execute_models(dag, engine_config)
     assert calls == dag.order
     assert all(result.status is ExecutionStatus.SUCCESS for result in results.values())

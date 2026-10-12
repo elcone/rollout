@@ -31,6 +31,9 @@ incremental = Model(identity, model.path, model.sql, config=ModelConfig(
 ))
 assert build_model_sql(incremental).startswith('CREATE TABLE "main"."numbers" AS')
 assert build_model_sql(incremental, target_exists=True).startswith('DELETE FROM "main"."numbers" AS target')
+append = Model(identity, model.path, model.sql, config=ModelConfig(load_strategy="APPEND"))
+assert build_model_sql(append).startswith('CREATE TABLE "main"."numbers" AS')
+assert build_model_sql(append, target_exists=True).startswith('INSERT INTO "main"."numbers"')
 import duckdb
 with duckdb.connect() as connection:
     connection.execute(build_model_sql(model))

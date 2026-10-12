@@ -28,6 +28,8 @@ Without `--output`, Markdown is written to stdout. Progress messages and errors 
 
 By default, each model uses FULL materialization: `CREATE OR REPLACE TABLE "schema"."model" AS` followed by its original SQL. Schemas are prepared once before model execution begins. Each table replacement runs in its own transaction. Success commits the transaction; failure rolls it back, preserving any previously materialized table. Unqualified table references resolve in `public` first, then DuckDB's `main` schema. External sources must already be accessible in the warehouse or through the model's SQL.
 
+Non-FULL load strategies initialize a missing target with the full dataset produced by the model SQL, using `CREATE TABLE "schema"."model" AS` followed by the original SQL. Once the target exists, including an empty table, Rollout applies the configured load strategy. Bootstrap and quality checks share the per-model transaction; an ERROR quality failure rolls back the newly created table.
+
 Failed or skipped local dependencies cause a model to be skipped, even if an older table exists. Independent branches continue executing. Results remain in memory and the CLI prints SUCCESS (🟢), FAILED (🔴), and SKIPPED (🟡) results with totals. The command exits with code 1 if a model fails or the DAG cannot be validated. Execution status is not persisted. Each run saves generated SQL under `.rollout/models/<UTC timestamp>/<schema>/<model>.sql`. Files contain the exact materialization SQL sent to DuckDB, including the original model SQL. Replaying an artifact requires its target schema to exist; Rollout prepares schemas separately. SQL is saved before execution, so failed models can be inspected too; skipped models have no file. An error saving generated SQL is logged as a warning and does not prevent execution. When using a custom warehouse path from Python, artifacts are stored beside the warehouse. These debug artifacts are retained; no automatic cleanup is performed.
 
 Use `rollout --verbose run` to see each model's file, dependencies, generated SQL path, transaction outcome, and blocking dependencies when skipped. The SQL body is not printed in verbose logs. Execution logs start with the model count and warehouse path. The console summary uses green for success, red for failure, and yellow for skipped models. Colors are automatically omitted when output is redirected.
@@ -36,6 +38,18 @@ After execution, Rollout saves a Markdown report in `.rollout/runs/` using a UTC
 
 Use `rollout run --output run.md` (or `-o run.md`) to save to an explicit path instead. Automatic save failures emit a warning and preserve the execution exit status. A failure writing an explicitly requested output returns a CLI error; model results remain unchanged.
 
+
+## APPEND loading
+
+Configure append-only loading in the model's sibling YAML file:
+
+```yaml
+load_strategy: APPEND
+```
+
+APPEND requires no additional configuration and rejects `delete_insert` configuration. For an existing target, it executes `INSERT INTO "schema"."model"` followed by the original model SQL. Rollout appends whatever dataset the model SQL produces; the model author decides which rows to produce. Repeated execution appends the rows again without deduplication or incremental state.
+
+Loading and quality checks share the existing per-model transaction. INSERT failures and ERROR quality failures roll back appended rows. WARNING quality failures commit and the model succeeds. Generated SQL artifacts contain the actual CREATE or INSERT statement executed.
 
 ## DELETE_INSERT loading
 
@@ -54,7 +68,7 @@ delete_insert:
 
 `delete_insert` and its nonempty `where` SQL are required and validated by Pydantic. The stable alias `target` refers to the existing target in the DELETE predicate. Predicates may include subqueries and reference other accessible tables. Rollout parses DELETE_INSERT predicates as DuckDB SQL expressions and rejects malformed or multi-statement input. Model configuration is still treated as trusted developer input. The predicate selects only existing rows to remove; the original model SQL independently determines every row inserted, without additional filtering.
 
-If the target table is absent, Rollout bootstraps with `CREATE TABLE "schema"."model" AS` followed by the model SQL. It does not reconstruct unavailable history. If the table exists, including an empty table, Rollout executes:
+For an existing target, Rollout executes:
 
 ```sql
 DELETE FROM "schema"."model" AS target
@@ -64,7 +78,7 @@ INSERT INTO "schema"."model"
 <model.sql>
 ```
 
-DELETE and INSERT run in the same per-model transaction as quality checks. A SQL failure or failed ERROR check rolls everything back, restoring the previous target; a failed WARNING check commits. Bootstrap rollback also removes the newly created table. Generated SQL artifacts show the actual bootstrap or DELETE and INSERT statements executed.
+DELETE and INSERT run in the same per-model transaction as quality checks. A SQL failure or failed ERROR check rolls everything back, restoring the previous target; a failed WARNING check commits. Generated SQL artifacts show the actual statements executed.
 
 ## Model discovery flow
 
@@ -108,7 +122,7 @@ results = execute_models(dag, EngineConfig())
 
 Discovery, parsing, DAG construction, and rendering return data without writing output files. `execute_models()` writes the DuckDB warehouse and returns in-memory model results. Model SQL errors become FAILED results; setup and validation errors propagate as exceptions.
 
-`EngineConfig(warehouse_path="path/to/warehouse.duckdb")` selects the database path. `Model.config` defaults to `ModelConfig(load_strategy="FULL")`; FULL and DELETE_INSERT are supported. Both configuration models use Pydantic validation and reject unknown fields. Internal models, DAGs, and execution results remain dataclasses.
+`EngineConfig(warehouse_path="path/to/warehouse.duckdb")` selects the database path. `Model.config` defaults to `ModelConfig(load_strategy="FULL")`; FULL, APPEND, and DELETE_INSERT are supported. Both configuration models use Pydantic validation and reject unknown fields. Internal models, DAGs, and execution results remain dataclasses.
 
 ## CLI
 

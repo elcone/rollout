@@ -159,7 +159,10 @@ def test_invalid_predicate_is_rejected_before_loading(
 
 
 @pytest.mark.parametrize("strategy, target_exists, prefix", [
+    ("APPEND", False, 'CREATE TABLE "public"."numbers" AS\n'),
+    ("APPEND", True, 'INSERT INTO "public"."numbers"\n'),
     ("FULL", False, 'CREATE OR REPLACE TABLE "public"."numbers" AS\n'),
+    ("FULL", True, 'CREATE OR REPLACE TABLE "public"."numbers" AS\n'),
     ("DELETE_INSERT", False, 'CREATE TABLE "public"."numbers" AS\n'),
     ("DELETE_INSERT", True,
      'DELETE FROM "public"."numbers" AS target\nWHERE target.number = 2;\n\n'

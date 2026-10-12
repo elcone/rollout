@@ -76,22 +76,37 @@ def target_table_exists(connection: duckdb.DuckDBPyConnection, model: Model) -> 
 
 
 def build_model_sql(model: Model, *, target_exists: bool = False) -> str:
-    if model.config.load_strategy is LoadStrategy.FULL:
+    strategy = model.config.load_strategy
+    if strategy is LoadStrategy.FULL:
         return build_full_sql(model)
 
-    if model.config.load_strategy is LoadStrategy.DELETE_INSERT:
+    if strategy is LoadStrategy.DELETE_INSERT:
         predicate = model.config.delete_insert.where.strip()
         validate_delete_predicate(predicate)
-        if target_exists:
-            return build_delete_insert_sql(model, predicate)
+
+    if not target_exists:
+        return build_bootstrap_sql(model)
+
+    if strategy is LoadStrategy.APPEND:
         schema = _quote_identifier(model.id.schema)
         table = _quote_identifier(model.id.name)
-        return sql_templates.get_template("load_strategies/delete_insert_bootstrap.sql.j2").render(
+        return sql_templates.get_template("load_strategies/append.sql.j2").render(
             target=f"{schema}.{table}", model_sql=model.sql
         )
 
+    if strategy is LoadStrategy.DELETE_INSERT:
+        return build_delete_insert_sql(model, predicate)
+
     raise ValueError(
         f"Unsupported load strategy for {model.id}: {model.config.load_strategy}"
+    )
+
+
+def build_bootstrap_sql(model: Model) -> str:
+    schema = _quote_identifier(model.id.schema)
+    table = _quote_identifier(model.id.name)
+    return sql_templates.get_template("load_strategies/bootstrap.sql.j2").render(
+        target=f"{schema}.{table}", model_sql=model.sql
     )
 
 
@@ -207,12 +222,13 @@ def execute_models(
                 continue
 
             model = dag.models[identity]
-            if model.config.load_strategy is LoadStrategy.DELETE_INSERT:
+            strategy = model.config.load_strategy
+            if strategy is LoadStrategy.FULL:
+                sql = build_model_sql(model)
+            else:
                 sql = build_model_sql(
                     model, target_exists=target_table_exists(connection, model)
                 )
-            else:
-                sql = build_model_sql(model)
             sql_path = run_dir / identity.schema / f"{identity.name}.sql"
             save_generated_sql(sql, sql_path)
             results[identity] = execute_model(connection, model, sql)

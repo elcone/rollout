@@ -20,6 +20,7 @@ class EngineConfig(BaseModel):
 
 class LoadStrategy(Enum):
     FULL = "FULL"
+    APPEND = "APPEND"
     DELETE_INSERT = "DELETE_INSERT"
 
 
@@ -85,8 +86,13 @@ class ModelConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_strategy_config(self) -> "ModelConfig":
-        if self.load_strategy is LoadStrategy.FULL and self.delete_insert is not None:
-            raise ValueError("FULL does not allow delete_insert configuration")
+        if (
+            self.load_strategy is not LoadStrategy.DELETE_INSERT
+            and self.delete_insert is not None
+        ):
+            raise ValueError(
+                f"{self.load_strategy.value} does not allow delete_insert configuration"
+            )
         if (
             self.load_strategy is LoadStrategy.DELETE_INSERT
             and self.delete_insert is None

@@ -138,7 +138,7 @@ def test_yml_is_not_loaded(write_models):
     ("plain text", "mapping/object"),
     ("1: value", "keywords must be strings"),
     ("unknown: value", "Extra inputs are not permitted"),
-    ("load_strategy: APPEND", "FULL"),
+    ("load_strategy: MERGE", "FULL"),
     ("quality:\n  - type: row_count\n    severity: ERROR", "min"),
     ("quality:\n  - type: custom_sql\n    severity: ERROR", "row_count"),
     ("!!python/object:builtins.object {}", "Invalid model configuration"),

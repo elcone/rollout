@@ -9,7 +9,8 @@ from rollout.config import EngineConfig, LoadStrategy, ModelConfig
 def test_configuration_defaults_and_string_inputs():
     assert ModelConfig().load_strategy is LoadStrategy.FULL
     assert ModelConfig(load_strategy="FULL").load_strategy is LoadStrategy.FULL
-    assert list(LoadStrategy) == [LoadStrategy.FULL, LoadStrategy.DELETE_INSERT]
+    assert ModelConfig(load_strategy="APPEND").load_strategy is LoadStrategy.APPEND
+    assert list(LoadStrategy) == [LoadStrategy.FULL, LoadStrategy.APPEND, LoadStrategy.DELETE_INSERT]
     assert EngineConfig().warehouse_path == Path(".rollout/warehouse.duckdb")
     assert EngineConfig(warehouse_path="warehouse.duckdb").warehouse_path == Path(
         "warehouse.duckdb"
@@ -19,7 +20,7 @@ def test_configuration_defaults_and_string_inputs():
 @pytest.mark.parametrize(
     "config_type, values",
     [
-        (ModelConfig, {"load_strategy": "APPEND"}),
+        (ModelConfig, {"load_strategy": "MERGE"}),
         (ModelConfig, {"load_strategy": None}),
         (ModelConfig, {"merge_key": "id"}),
         (EngineConfig, {"engine": "ducklake"}),
@@ -67,6 +68,7 @@ def test_delete_insert_configuration_preserves_sql():
         config.delete_insert.where = "TRUE"
 
 
-def test_full_rejects_delete_insert_configuration():
-    with pytest.raises(ValidationError, match="FULL does not allow"):
-        ModelConfig(load_strategy="FULL", delete_insert={"where": "target.id = 1"})
+@pytest.mark.parametrize("strategy", ["FULL", "APPEND"])
+def test_non_delete_insert_strategy_rejects_delete_insert_configuration(strategy):
+    with pytest.raises(ValidationError, match=f"{strategy} does not allow"):
+        ModelConfig(load_strategy=strategy, delete_insert={"where": "target.id = 1"})
