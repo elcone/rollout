@@ -23,8 +23,8 @@ def test_dag_stdout_and_output_file(write_models, tmp_path):
 @pytest.mark.parametrize("fails", [False, True])
 def test_run_summary(write_models, tmp_path, monkeypatch, fails):
     files = {
-        "staging/customers.sql": "SELECT 1 AS id",
-        "silver/customers.sql": "SELECT * FROM staging.customers",
+        "bronze/customers.sql": "SELECT 1 AS id",
+        "silver/customers.sql": "SELECT * FROM bronze.customers",
     }
     if fails:
         files.update(
@@ -37,7 +37,7 @@ def test_run_summary(write_models, tmp_path, monkeypatch, fails):
     monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(app, ["run"])
     assert result.exit_code == int(fails), result.output
-    assert "🟢 staging.customers" in result.stdout
+    assert "🟢 bronze.customers" in result.stdout
     assert "🟢 silver.customers" in result.stdout
     assert "2 successful" in result.stdout
     assert f"{int(fails)} failed" in result.stdout
@@ -133,7 +133,9 @@ def test_run_output_report_after_execution(write_models, tmp_path, monkeypatch, 
         assert "| gold.report | SKIPPED | — | — |  |" in report
 
 
-def test_run_report_write_failure_returns_one_after_execution(write_models, tmp_path, monkeypatch):
+def test_run_report_write_failure_returns_one_after_execution(
+    write_models, tmp_path, monkeypatch
+):
     write_models({"numbers.sql": "SELECT 1"})
     monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(app, ["run", "--output", str(tmp_path)])
@@ -143,7 +145,9 @@ def test_run_report_write_failure_returns_one_after_execution(write_models, tmp_
     assert "Materialized public.numbers" in result.stderr
 
 
-def test_automatic_report_location_filename_and_previous_runs(write_models, tmp_path, monkeypatch):
+def test_automatic_report_location_filename_and_previous_runs(
+    write_models, tmp_path, monkeypatch
+):
     import re
     from datetime import datetime
 

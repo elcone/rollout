@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from rollout.config import ModelConfig
+from rollout.config import ModelConfig, SeederConfig
+
+STAGING_SCHEMA = "staging"
 
 
 @dataclass(frozen=True, order=True)
@@ -21,3 +23,13 @@ class Model:
     sql: str
     dependencies: frozenset[ModelId] = field(default_factory=frozenset)
     config: ModelConfig = field(default_factory=ModelConfig)
+
+
+@dataclass(frozen=True)
+class Seeder:
+    path: Path
+    config: SeederConfig
+
+    @property
+    def output_ids(self) -> tuple[ModelId, ...]:
+        return tuple(ModelId(STAGING_SCHEMA, name) for name in self.config.outputs)

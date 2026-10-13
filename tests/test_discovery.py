@@ -8,7 +8,7 @@ def test_layout_order_and_original_sql(write_models):
     sql = "-- numbers\nSELECT 1 AS number;\n"
     root = write_models(
         {
-            "staging/customers.sql": "SELECT 2 AS id",
+            "silver/customers.sql": "SELECT 2 AS id",
             "report.sql": sql,
             "ignored.py": "not SQL",
         }
@@ -16,7 +16,7 @@ def test_layout_order_and_original_sql(write_models):
     models = discover_models(root)
     assert [model.id for model in models] == [
         ModelId("public", "report"),
-        ModelId("staging", "customers"),
+        ModelId("silver", "customers"),
     ]
     assert models[0].path == root / "report.sql"
     assert models[0].sql == sql
@@ -34,8 +34,8 @@ def test_explicit_public_directory_is_rejected(write_models, files):
 def test_nested_models_are_logged_and_skipped(write_models, caplog):
     root = write_models(
         {
-            "staging/nested/report.sql": "SELECT FROM",
-            "staging/nested/deeper/report.sql": "SELECT 1",
+            "bronze/nested/report.sql": "SELECT FROM",
+            "bronze/nested/deeper/report.sql": "SELECT 1",
             "report.sql": "SELECT 1",
             "silver/report.sql": "SELECT * FROM report",
         }

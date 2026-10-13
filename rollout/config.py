@@ -1,5 +1,7 @@
+from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -97,6 +99,30 @@ QualityCheck = Annotated[
     RowCountCheck | NullnessCheck | UniquenessCheck | CustomSqlCheck,
     Field(discriminator="type"),
 ]
+
+
+class SeederOutputConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    quality: tuple[QualityCheck, ...] = ()
+
+
+class SeederConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outputs: Annotated[
+        Mapping[Annotated[str, Field(min_length=1)], SeederOutputConfig],
+        Field(min_length=1),
+    ]
+
+    @field_validator("outputs")
+    @classmethod
+    def freeze_outputs(
+        cls, outputs: Mapping[str, SeederOutputConfig]
+    ) -> Mapping[str, SeederOutputConfig]:
+        if any(not name.strip() for name in outputs):
+            raise ValueError("output names must not be empty")
+        return MappingProxyType(dict(outputs))
 
 
 class DeleteInsertConfig(BaseModel):
