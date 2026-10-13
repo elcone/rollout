@@ -11,7 +11,7 @@ def test_reports_and_sql_load_templates_from_packaged_resources(tmp_path):
     archive = tmp_path / "rollout.zip"
     with ZipFile(archive, "w") as package:
         for path in package_dir.rglob("*"):
-            if path.suffix in {".py", ".j2"}:
+            if path.suffix in {".py", ".j2", ".sql"}:
                 package.write(path, path.relative_to(package_dir.parent))
     script = """
 import sys
@@ -20,7 +20,7 @@ from rollout.dag import build_dag
 from rollout.renderer import render_markdown, render_execution_markdown
 from pathlib import Path
 from rollout.config import ModelConfig
-from rollout.execution import build_model_sql
+from rollout.execution import build_model_sql, target_table_exists
 from rollout.models import Model, ModelId
 from rollout.quality import build_row_count_sql, build_nullness_sql, build_uniqueness_sql
 identity = ModelId("main", "numbers")
@@ -36,7 +36,9 @@ assert build_model_sql(append).startswith('CREATE TABLE "main"."numbers" AS')
 assert build_model_sql(append, target_exists=True).startswith('INSERT INTO "main"."numbers"')
 import duckdb
 with duckdb.connect() as connection:
+    assert not target_table_exists(connection, model)
     connection.execute(build_model_sql(model))
+    assert target_table_exists(connection, model)
     assert connection.execute(build_row_count_sql(identity)).fetchone() == (1,)
     assert connection.execute(build_nullness_sql(identity, "number")).fetchone() == (0,)
     assert connection.execute(build_uniqueness_sql(identity, ("number",))).fetchone() == (0,)

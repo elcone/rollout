@@ -70,9 +70,7 @@ def build_delete_insert_sql(model: Model, predicate: str) -> str:
 
 def target_table_exists(connection: duckdb.DuckDBPyConnection, model: Model) -> bool:
     return connection.execute(
-        "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-        "WHERE table_catalog = current_database() AND table_schema = ? "
-        "AND table_name = ? AND table_type = 'BASE TABLE')",
+        sql_templates.get_template("misc/table_exists.sql").render(),
         [model.id.schema, model.id.name],
     ).fetchone()[0]
 
