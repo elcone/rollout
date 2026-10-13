@@ -6,13 +6,17 @@ import duckdb
 import pytest
 from pydantic import ValidationError
 
-from rollout.config import ModelConfig, CheckSeverity
+from rollout.config import CheckSeverity, ModelConfig
 from rollout.dag import build_dag
-from rollout.execution import ExecutionStatus, build_model_sql, execute_model, execute_models
+from rollout.execution import (
+    ExecutionStatus,
+    build_model_sql,
+    execute_model,
+    execute_models,
+)
 from rollout.models import Model, ModelId
 from rollout.quality import CheckStatus, evaluate_check, observe_numeric_scalar
 from rollout.renderer import render_execution_markdown
-
 
 RUN_TIMING = {
     "started_at": datetime(2026, 10, 11, 23, 13, 24, tzinfo=UTC),
@@ -20,69 +24,105 @@ RUN_TIMING = {
     "total_duration": 5.42,
 }
 
+
 def model(sql, checks):
-    return Model(ModelId("main", "data"), Path("data.sql"), sql,
-                 config=ModelConfig(quality=checks))
+    return Model(
+        ModelId("main", "data"),
+        Path("data.sql"),
+        sql,
+        config=ModelConfig(quality=checks),
+    )
 
 
-@pytest.mark.parametrize("count,minimum,severity,status", [
-    (1, 1, "ERROR", "PASS"), (0, 1, "WARNING", "FAIL"), (0, 1, "ERROR", "FAIL"),
-])
+@pytest.mark.parametrize(
+    "count,minimum,severity,status",
+    [
+        (1, 1, "ERROR", "PASS"),
+        (0, 1, "WARNING", "FAIL"),
+        (0, 1, "ERROR", "FAIL"),
+    ],
+)
 def test_row_count(count, minimum, severity, status):
-    item = model(f"SELECT 1 AS id LIMIT {count}", [
-        dict(type="row_count", min=minimum, severity=severity)])
+    item = model(
+        f"SELECT 1 AS id LIMIT {count}",
+        [dict(type="row_count", min=minimum, severity=severity)],
+    )
     with duckdb.connect() as connection:
         result = execute_model(connection, item, build_model_sql(item))
         assert result.quality_results[0].status.value == status
         assert result.quality_results[0].observed_value == count
-        assert result.status is (ExecutionStatus.FAILED if status == "FAIL" and severity == "ERROR" else ExecutionStatus.SUCCESS)
+        assert result.status is (
+            ExecutionStatus.FAILED
+            if status == "FAIL" and severity == "ERROR"
+            else ExecutionStatus.SUCCESS
+        )
 
 
-@pytest.mark.parametrize("sql,threshold,observed,status", [
-    ('SELECT 1 AS "a""b"', 0, 0, "PASS"),
-    ('SELECT NULL AS "a""b"', 1, 1, "PASS"),
-    ('SELECT NULL AS "a""b"', 0, 1, "FAIL"),
-])
+@pytest.mark.parametrize(
+    "sql,threshold,observed,status",
+    [
+        ('SELECT 1 AS "a""b"', 0, 0, "PASS"),
+        ('SELECT NULL AS "a""b"', 1, 1, "PASS"),
+        ('SELECT NULL AS "a""b"', 0, 1, "FAIL"),
+    ],
+)
 def test_nullness(sql, threshold, observed, status):
-    item = model(sql, [dict(type="nullness", column='a"b', max=threshold, severity="WARNING")])
+    item = model(
+        sql, [dict(type="nullness", column='a"b', max=threshold, severity="WARNING")]
+    )
     with duckdb.connect() as connection:
         result = execute_model(connection, item, build_model_sql(item))
     check = result.quality_results[0]
     assert (check.observed_value, check.status.value) == (observed, status)
 
 
-@pytest.mark.parametrize("rows,columns,observed", [
-    ("(1, 1), (2, 1)", ["id"], 0),
-    ("(1, 1), (1, 2), (2, 1), (2, 1)", ["id"], 2),
-    ("(1, 1), (1, 2)", ["id", "part"], 0),
-    ("(1, 1), (1, 1), (1, 2)", ["id", "part"], 1),
-])
+@pytest.mark.parametrize(
+    "rows,columns,observed",
+    [
+        ("(1, 1), (2, 1)", ["id"], 0),
+        ("(1, 1), (1, 2), (2, 1), (2, 1)", ["id"], 2),
+        ("(1, 1), (1, 2)", ["id", "part"], 0),
+        ("(1, 1), (1, 1), (1, 2)", ["id", "part"], 1),
+    ],
+)
 def test_uniqueness(rows, columns, observed):
-    item = model(f"SELECT * FROM (VALUES {rows}) AS t(id, part)", [
-        dict(type="uniqueness", columns=columns, max=0, severity="WARNING")])
+    item = model(
+        f"SELECT * FROM (VALUES {rows}) AS t(id, part)",
+        [dict(type="uniqueness", columns=columns, max=0, severity="WARNING")],
+    )
     with duckdb.connect() as connection:
         result = execute_model(connection, item, build_model_sql(item))
     assert result.quality_results[0].observed_value == observed
-    assert result.quality_results[0].status is (CheckStatus.PASS if observed == 0 else CheckStatus.FAIL)
+    assert result.quality_results[0].status is (
+        CheckStatus.PASS if observed == 0 else CheckStatus.FAIL
+    )
 
 
-@pytest.mark.parametrize("sql,expected", [
-    ("SELECT 42", 42), ("SELECT 1.25", Decimal("1.25")), ("SELECT 1::DOUBLE", 1.0),
-])
+@pytest.mark.parametrize(
+    "sql,expected",
+    [
+        ("SELECT 42", 42),
+        ("SELECT 1.25", Decimal("1.25")),
+        ("SELECT 1::DOUBLE", 1.0),
+    ],
+)
 def test_numeric_scalar(sql, expected):
     with duckdb.connect() as connection:
         assert observe_numeric_scalar(connection, sql) == expected
 
 
-@pytest.mark.parametrize("sql,message", [
-    ("SELECT 1 WHERE FALSE", "one row"),
-    ("SELECT 1 UNION ALL SELECT 2", "one row"),
-    ("SELECT 1, 2", "one column"),
-    ("SELECT 'text'", "numeric scalar"),
-    ("SELECT TRUE", "numeric scalar"),
-    ("SELECT NULL", "numeric scalar"),
-    ("SELECT DATE '2026-01-01'", "numeric scalar"),
-])
+@pytest.mark.parametrize(
+    "sql,message",
+    [
+        ("SELECT 1 WHERE FALSE", "one row"),
+        ("SELECT 1 UNION ALL SELECT 2", "one row"),
+        ("SELECT 1, 2", "one column"),
+        ("SELECT 'text'", "numeric scalar"),
+        ("SELECT TRUE", "numeric scalar"),
+        ("SELECT NULL", "numeric scalar"),
+        ("SELECT DATE '2026-01-01'", "numeric scalar"),
+    ],
+)
 def test_invalid_scalar(sql, message):
     with duckdb.connect() as connection, pytest.raises(ValueError, match=message):
         observe_numeric_scalar(connection, sql)
@@ -90,24 +130,38 @@ def test_invalid_scalar(sql, message):
 
 @pytest.mark.parametrize("severity", ["WARNING", "ERROR"])
 def test_transactions_dependents_and_report(engine_config, severity):
-    parent = model("SELECT 2 AS id", [
-        dict(type="row_count", min=1, severity="ERROR"),
-        dict(type="row_count", min=2, severity=severity)])
-    child = Model(ModelId("main", "child"), Path("child.sql"), "SELECT * FROM main.data",
-                  dependencies=frozenset([parent.id]))
+    parent = model(
+        "SELECT 2 AS id",
+        [
+            dict(type="row_count", min=1, severity="ERROR"),
+            dict(type="row_count", min=2, severity=severity),
+        ],
+    )
+    child = Model(
+        ModelId("main", "child"),
+        Path("child.sql"),
+        "SELECT * FROM main.data",
+        dependencies=frozenset([parent.id]),
+    )
     engine_config.warehouse_path.parent.mkdir()
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         connection.execute("CREATE TABLE main.data AS SELECT 99 AS id")
     dag = build_dag([parent, child])
     results = execute_models(dag, engine_config)
     warning = severity == "WARNING"
-    assert results[parent.id].status is (ExecutionStatus.SUCCESS if warning else ExecutionStatus.FAILED)
-    assert results[child.id].status is (ExecutionStatus.SUCCESS if warning else ExecutionStatus.SKIPPED)
+    assert results[parent.id].status is (
+        ExecutionStatus.SUCCESS if warning else ExecutionStatus.FAILED
+    )
+    assert results[child.id].status is (
+        ExecutionStatus.SUCCESS if warning else ExecutionStatus.SKIPPED
+    )
     check = results[parent.id].quality_results[1]
     assert check.status is CheckStatus.FAIL
     assert check.severity is CheckSeverity(severity)
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
-        assert connection.execute("SELECT * FROM main.data").fetchall() == [(2 if warning else 99,)]
+        assert connection.execute("SELECT * FROM main.data").fetchall() == [
+            (2 if warning else 99,)
+        ]
     report = render_execution_markdown(dag, results, **RUN_TIMING)
     assert f"1 PASS · 1 {severity}" in report
     assert "## Quality details" in report
@@ -121,9 +175,13 @@ def test_transactions_dependents_and_report(engine_config, severity):
 
 
 def test_quality_execution_error_rolls_back_even_for_warning():
-    item = model("SELECT 2 AS id", [
-        dict(type="row_count", min=1, severity="ERROR"),
-        dict(type="nullness", column="missing", max=0, severity="WARNING")])
+    item = model(
+        "SELECT 2 AS id",
+        [
+            dict(type="row_count", min=1, severity="ERROR"),
+            dict(type="nullness", column="missing", max=0, severity="WARNING"),
+        ],
+    )
     with duckdb.connect() as connection:
         connection.execute("CREATE TABLE data AS SELECT 99 AS id")
         result = execute_model(connection, item, build_model_sql(item))
@@ -141,25 +199,30 @@ def test_model_sql_error_does_not_run_checks():
     assert result.quality_results == ()
 
 
-@pytest.mark.parametrize("check", [
-    dict(type="row_count", severity="ERROR"),
-    dict(type="row_count", severity="ERROR", min=-1),
-    dict(type="row_count", severity="ERROR", min=True),
-    dict(type="row_count", severity="ERROR", min=1.5),
-    dict(type="row_count", severity="OTHER", min=1),
-    dict(type="row_count", min=1),
-    dict(type="custom_sql", severity="ERROR", min=1),
-    dict(type="nullness", severity="WARNING", column="", max=0),
-    dict(type="uniqueness", severity="ERROR", columns=[], max=0),
-    dict(type="row_count", severity="ERROR", min=1, extra=2),
-])
+@pytest.mark.parametrize(
+    "check",
+    [
+        dict(type="row_count", severity="ERROR"),
+        dict(type="row_count", severity="ERROR", min=-1),
+        dict(type="row_count", severity="ERROR", min=True),
+        dict(type="row_count", severity="ERROR", min=1.5),
+        dict(type="row_count", severity="OTHER", min=1),
+        dict(type="row_count", min=1),
+        dict(type="custom_sql", severity="ERROR", min=1),
+        dict(type="nullness", severity="WARNING", column="", max=0),
+        dict(type="uniqueness", severity="ERROR", columns=[], max=0),
+        dict(type="row_count", severity="ERROR", min=1, extra=2),
+    ],
+)
 def test_invalid_configuration(check):
     with pytest.raises(ValidationError):
         ModelConfig(quality=[check])
 
 
 def test_configuration_is_deeply_immutable():
-    config = ModelConfig(quality=[dict(type="uniqueness", severity="ERROR", columns=["id"], max=0)])
+    config = ModelConfig(
+        quality=[dict(type="uniqueness", severity="ERROR", columns=["id"], max=0)]
+    )
     assert isinstance(config.quality, tuple)
     assert config.quality[0].columns == ("id",)
     with pytest.raises(ValidationError):
@@ -167,39 +230,49 @@ def test_configuration_is_deeply_immutable():
 
 
 def test_sql_quotes_target_and_key_identifiers():
-    from rollout.quality import build_row_count_sql, build_nullness_sql
+    from rollout.quality import build_nullness_sql, build_row_count_sql
 
     identity = ModelId('s"x', 't"y')
-    assert build_row_count_sql(identity) == 'SELECT COUNT(*)\nFROM "s""x"."t""y"'
+    assert build_row_count_sql(identity) == 'SELECT count(*)\nFROM "s""x"."t""y"'
     assert build_nullness_sql(identity, 'c"z') == (
-        'SELECT COUNT(*)\nFROM "s""x"."t""y"\nWHERE "c""z" IS NULL'
+        'SELECT count(*)\nFROM "s""x"."t""y"\nWHERE "c""z" IS NULL'
     )
 
 
-@pytest.mark.parametrize("columns, quoted", [
-    (('c"z',), '"c""z"'),
-    (('c"z', 'order'), '"c""z", "order"'),
-])
+@pytest.mark.parametrize(
+    "columns, quoted",
+    [
+        (('c"z',), '"c""z"'),
+        (('c"z', "order"), '"c""z", "order"'),
+    ],
+)
 def test_uniqueness_sql_uses_same_quoted_columns_for_grouping(columns, quoted):
     from rollout.quality import build_uniqueness_sql
 
     assert build_uniqueness_sql(ModelId('s"x', 't"y'), columns) == (
-        'SELECT COUNT(*)\nFROM (\n'
-        f'    SELECT {quoted}\n'
+        "SELECT count(*)\nFROM (\n"
+        f"    SELECT {quoted}\n"
         '    FROM "s""x"."t""y"\n'
-        f'    GROUP BY {quoted}\n'
-        '    HAVING COUNT(*) > 1\n'
-        ') AS duplicate_groups'
+        f"    GROUP BY {quoted}\n"
+        "    HAVING count(*) > 1\n"
+        ") AS duplicate_groups"
     )
 
 
 def test_warning_details_and_names_are_escaped_in_report():
-    item = model('SELECT NULL AS "a|<b>"', [
-        dict(type="nullness", column="a|<b>", max=0, severity="WARNING")])
+    item = model(
+        'SELECT NULL AS "a|<b>"',
+        [dict(type="nullness", column="a|<b>", max=0, severity="WARNING")],
+    )
     with duckdb.connect() as connection:
         result = execute_model(connection, item, build_model_sql(item))
-    report = render_execution_markdown(build_dag([item]), {item.id: result}, **RUN_TIMING)
-    assert "| main.data | nullness(a&#124;&lt;b&gt;) | 1 | <= 0 | FAIL | WARNING |" in report
+    report = render_execution_markdown(
+        build_dag([item]), {item.id: result}, **RUN_TIMING
+    )
+    assert (
+        "| main.data | nullness(a&#124;&lt;b&gt;) | 1 | <= 0 | FAIL | WARNING |"
+        in report
+    )
     assert "| 1 WARNING |" in report
     assert "<br/>Quality: 1 WARNING" in report
 
@@ -215,4 +288,3 @@ def test_warning_details_and_names_are_escaped_in_report():
 def test_quality_checks_evaluate_expectations(configuration, expected):
     check = ModelConfig(quality=[{**configuration, "severity": "ERROR"}]).quality[0]
     assert [evaluate_check(check, value) for value in (0, 1, 2)] == expected
-

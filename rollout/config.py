@@ -6,6 +6,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictFloat,
     StrictInt,
     field_validator,
     model_validator,
@@ -59,8 +60,42 @@ class UniquenessCheck(BaseModel):
     max: Count
 
 
+class ExpectationOperator(Enum):
+    GT = "gt"
+    GTE = "gte"
+    EQ = "eq"
+    NEQ = "neq"
+    LT = "lt"
+    LTE = "lte"
+
+
+class Expectation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operator: ExpectationOperator
+    value: StrictInt | StrictFloat
+
+
+class CustomSqlCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type: Literal["custom_sql"]
+    name: Annotated[str, Field(strict=True, min_length=1)]
+    sql: Annotated[str, Field(strict=True, min_length=1)]
+    expectations: Annotated[tuple[Expectation, ...], Field(min_length=1)]
+    severity: CheckSeverity
+
+    @field_validator("name", "sql")
+    @classmethod
+    def require_nonempty_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty")
+        return value
+
+
 QualityCheck = Annotated[
-    RowCountCheck | NullnessCheck | UniquenessCheck, Field(discriminator="type")
+    RowCountCheck | NullnessCheck | UniquenessCheck | CustomSqlCheck,
+    Field(discriminator="type"),
 ]
 
 

@@ -33,7 +33,7 @@ def validate_delete_predicate(predicate: str) -> None:
         raise ValueError(f"Invalid delete_insert.where: {exc}") from exc
 
 
-def extract_dependencies(sql: str) -> frozenset[ModelId] | None:
+def parse_read_only_query(sql: str) -> exp.Expression | None:
     statements = [
         statement
         for statement in sqlglot.parse(sql, read="duckdb")
@@ -51,6 +51,14 @@ def extract_dependencies(sql: str) -> frozenset[ModelId] | None:
         isinstance(node, (exp.DML, exp.DDL, exp.Into)) for node in statement.walk()
     ):
         raise ValueError("SQL models must contain only a read-only query")
+
+    return statement
+
+
+def extract_dependencies(sql: str) -> frozenset[ModelId] | None:
+    statement = parse_read_only_query(sql)
+    if statement is None:
+        return None
 
     dependencies = set()
     for pivot in list(statement.find_all(exp.Pivot)):

@@ -1,3 +1,4 @@
+import operator
 from collections.abc import Iterator
 from dataclasses import dataclass
 from decimal import Decimal
@@ -5,16 +6,29 @@ from enum import Enum
 from numbers import Real
 
 import duckdb
+from sqlglot.errors import SqlglotError
 
 from rollout.config import (
     CheckSeverity,
+    CustomSqlCheck,
+    ExpectationOperator,
     NullnessCheck,
     QualityCheck,
     RowCountCheck,
     UniquenessCheck,
 )
 from rollout.models import Model, ModelId
+from rollout.parser import parse_read_only_query
 from rollout.sql_templates import sql_templates
+
+OPERATORS = {
+    ExpectationOperator.GT: operator.gt,
+    ExpectationOperator.GTE: operator.ge,
+    ExpectationOperator.EQ: operator.eq,
+    ExpectationOperator.NEQ: operator.ne,
+    ExpectationOperator.LT: operator.lt,
+    ExpectationOperator.LTE: operator.le,
+}
 
 
 class CheckStatus(Enum):
@@ -81,11 +95,27 @@ def observe_numeric_scalar(
     return value
 
 
+def normalize_number(value: int | float | Decimal) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, float):
+        return Decimal(str(value))
+    return Decimal(value)
+
+
 def evaluate_check(
     check: QualityCheck,
     observed_value: int | float | Decimal,
 ) -> bool:
-    if isinstance(check, RowCountCheck):
+    if isinstance(check, CustomSqlCheck):
+        observed = normalize_number(observed_value)
+        return all(
+            OPERATORS[expectation.operator](
+                observed, normalize_number(expectation.value)
+            )
+            for expectation in check.expectations
+        )
+    elif isinstance(check, RowCountCheck):
         return observed_value >= check.min
     elif isinstance(check, NullnessCheck):
         return observed_value <= check.max
@@ -99,7 +129,9 @@ def run_quality_checks(
     connection: duckdb.DuckDBPyConnection, model: Model
 ) -> Iterator[QualityCheckResult]:
     for check in model.config.quality:
-        if isinstance(check, RowCountCheck):
+        if isinstance(check, CustomSqlCheck):
+            sql = check.sql
+        elif isinstance(check, RowCountCheck):
             sql = build_row_count_sql(model.id)
         elif isinstance(check, NullnessCheck):
             sql = build_nullness_sql(model.id, check.column)
@@ -109,8 +141,11 @@ def run_quality_checks(
             raise ValueError(f"Unsupported quality check: {type(check).__name__}")
 
         try:
+            if isinstance(check, CustomSqlCheck):
+                if parse_read_only_query(sql) is None:
+                    raise ValueError("Custom SQL must contain one read-only query")
             observed = observe_numeric_scalar(connection, sql)
-        except (duckdb.Error, ValueError) as exc:
+        except (duckdb.Error, ValueError, SqlglotError) as exc:
             raise ValueError(
                 f"Quality check execution error ({check.type}): {exc}"
             ) from exc

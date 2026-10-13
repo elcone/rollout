@@ -173,6 +173,27 @@ quality:
     severity: ERROR
 ```
 
-Every check requires a severity and a nonnegative integer expectation. Uniqueness counts duplicate key groups, including groups containing NULLs, rather than excess rows. Column names are quoted as SQL identifiers.
+Every check requires a severity. Built-in checks require a nonnegative integer expectation. Uniqueness counts duplicate key groups, including groups containing NULLs, rather than excess rows. Column names are quoted as SQL identifiers.
 
 Checks run after materialization inside its transaction. PASS continues; failed WARNING checks commit and keep the model successful; failed ERROR checks roll back and skip local dependents. Check execution or invalid scalar results always fail and roll back the model, even for a WARNING check. Completed check results remain in memory and appear in the execution report's quality summary and details. Mermaid cards show only quality counts and retain execution-status colors.
+
+Custom checks use a required name, authored SQL, and one or more numeric expectations:
+
+```yaml
+quality:
+  - type: custom_sql
+    name: completion_rate
+    sql: |
+      SELECT count(*) FILTER (WHERE completed) * 1.0 / count(*)
+      FROM silver.orders
+    expectations:
+      - operator: gte
+        value: 0.95
+      - operator: lte
+        value: 1
+    severity: WARNING
+```
+
+Custom SQL runs exactly as authored, without Jinja rendering or reformatting. It is validated during quality execution as one read-only query using the same parser as model SQL; data modification, DDL, SELECT INTO, and multiple statements are rejected. The query may access warehouse tables and must return exactly one row and one column containing a numeric value; strings, dates, booleans, and NULL are unsupported.
+
+Expectations support `gt`, `gte`, `eq`, `neq`, `lt`, and `lte`. All expectations must pass (AND semantics). Reports display the check name and SQL-style comparisons, such as `>= 0.95 AND <= 1`. Invalid SQL, execution errors, and invalid scalar results roll back regardless of severity.
