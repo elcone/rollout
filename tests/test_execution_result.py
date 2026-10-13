@@ -28,7 +28,7 @@ def test_mixed_results_order_summary_and_lineage(model_dag):
     }
     report = render_execution_markdown(dag, results, **RUN_TIMING)
     assert "- Successful: 1\n- Failed: 1\n- Skipped: 1" in report
-    rows = [line for line in report.splitlines() if line.startswith("| ")][2:]
+    rows = [line for line in report.split("## Model results", 1)[1].split("## Quality details", 1)[0].splitlines() if line.startswith("| ")][2:]
     assert rows == [
         "| bronze.orders | SUCCESS | 0.13s | — |  |",
         "| silver.orders | FAILED | 0.08s | — | See failure details |",
@@ -151,7 +151,7 @@ def test_root_failures_and_details_follow_execution_order(model_dag, engine_conf
         node for node in dag.order if results[node].status is ExecutionStatus.FAILED
     ]
     root_section = report.split("## Root failures\n\n", 1)[1].split(
-        "## Model results", 1
+        "## Seeder results", 1
     )[0]
     assert root_section.strip().splitlines() == [f"- {node}" for node in failed]
     details = report.split("## Failure details", 1)[1].split("## Execution lineage", 1)[

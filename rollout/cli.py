@@ -10,20 +10,24 @@ import typer
 
 from rollout.config import EngineConfig
 from rollout.dag import build_dag
-from rollout.discovery import discover_models
-from rollout.execution import ExecutionStatus, execute_models
+from rollout.discovery import discover_models, discover_seeders
+from rollout.execution import ExecutionStatus, connect, execute_models_with_connection
 from rollout.parser import parse_models
 from rollout.renderer import render_execution_markdown, render_markdown
+from rollout.seeders import execute_seeder
 
 logger = logging.getLogger(__name__)
-app = typer.Typer(help="Inspect SQL dependency DAGs and execute models in DuckDB.")
+app = typer.Typer(
+    help="Inspect Model DAGs and execute project Seeders and Models in DuckDB."
+)
 
 
 @app.callback()
 def main(
     ctx: typer.Context,
     verbose: Annotated[
-        bool, typer.Option("--verbose", "-v", help="Show per-model debug messages.")
+        bool,
+        typer.Option("--verbose", "-v", help="Show Seeder and Model debug messages."),
     ] = False,
 ) -> None:
     package_logger = logging.getLogger("rollout")
@@ -45,11 +49,24 @@ def main(
     ctx.call_on_close(cleanup_logging)
 
 
+def print_section(title: str) -> None:
+    typer.echo()
+    typer.secho(
+        title,
+        bold=True,
+        fg=typer.colors.BRIGHT_WHITE,
+    )
+
+
 @app.command()
 def dag(
-    models_dir: Annotated[
-        Path, typer.Option("--models-dir", help="Directory containing SQL models.")
-    ] = Path("models"),
+    project_dir: Annotated[
+        Path,
+        typer.Option(
+            "--project-dir",
+            help="Project directory containing models/ and optional seeders/.",
+        ),
+    ] = Path("."),
     output: Annotated[
         Path | None,
         typer.Option(
@@ -58,7 +75,7 @@ def dag(
     ] = None,
 ) -> None:
     try:
-        models = discover_models(models_dir)
+        models = discover_models(project_dir / "models")
         models = parse_models(models)
         dag = build_dag(models)
         markdown = render_markdown(dag)
@@ -77,9 +94,13 @@ def dag(
 
 @app.command()
 def run(
-    models_dir: Annotated[
-        Path, typer.Option("--models-dir", help="Directory containing SQL models.")
-    ] = Path("models"),
+    project_dir: Annotated[
+        Path,
+        typer.Option(
+            "--project-dir",
+            help="Project directory containing models/ and optional seeders/.",
+        ),
+    ] = Path("."),
     output: Annotated[
         Path | None,
         typer.Option(
@@ -91,12 +112,23 @@ def run(
 ) -> None:
     try:
         engine_config = EngineConfig()
-        models = discover_models(models_dir)
-        models = parse_models(models)
-        dag = build_dag(models)
         started_at = datetime.now(UTC)
         started = perf_counter()
-        results = execute_models(dag, engine_config)
+        seeder_results = {}
+        with connect(engine_config) as connection:
+            seeders_dir = project_dir / "seeders"
+            seeders = discover_seeders(seeders_dir) if seeders_dir.exists() else []
+            if not seeders_dir.exists():
+                logger.info(
+                    "No seeders directory at %s; executing zero seeders", seeders_dir
+                )
+            for seeder in seeders:
+                name = seeder.path.relative_to(project_dir).as_posix()
+                seeder_results[name] = execute_seeder(seeder, connection)
+            models = discover_models(project_dir / "models")
+            models = parse_models(models)
+            dag = build_dag(models)
+            results = execute_models_with_connection(connection, dag, engine_config)
         finished_at = datetime.now(UTC)
         total_duration = perf_counter() - started
 
@@ -114,8 +146,27 @@ def run(
         ExecutionStatus.FAILED: typer.colors.RED,
         ExecutionStatus.SKIPPED: typer.colors.YELLOW,
     }
-    for identity, result in results.items():
-        typer.secho(f"{symbols[result.status]} {identity}", fg=colors[result.status])
+    seeder_outputs = {
+        identity: result
+        for seeder_result in seeder_results.values()
+        for identity, result in seeder_result.outputs.items()
+    }
+    for label, category in (
+        ("Seeders", seeder_results),
+        ("Seeder outputs", seeder_outputs),
+        ("Models", results),
+    ):
+        print_section(label)
+        for identity, result in category.items():
+            typer.secho(
+                f"{symbols[result.status]} {identity}", fg=colors[result.status]
+            )
+
+    all_results = [
+        *seeder_results.values(),
+        *seeder_outputs.values(),
+        *results.values(),
+    ]
 
     typer.echo()
     for status, label in (
@@ -123,7 +174,7 @@ def run(
         (ExecutionStatus.FAILED, "failed"),
         (ExecutionStatus.SKIPPED, "skipped"),
     ):
-        count = sum(result.status is status for result in results.values())
+        count = sum(result.status is status for result in all_results)
         typer.secho(f"{count} {label}", fg=colors[status])
 
     report_path = output
@@ -136,11 +187,11 @@ def run(
         started_at=started_at,
         finished_at=finished_at,
         total_duration=total_duration,
+        seeder_results=seeder_results,
     )
     try:
         if output is None:
             report_path.parent.mkdir(parents=True, exist_ok=True)
-            # Keep earlier reports even if a timestamp collision occurs.
             with report_path.open("x", encoding="utf-8") as report_file:
                 report_file.write(markdown)
         else:
@@ -151,7 +202,7 @@ def run(
         if output is not None:
             raise typer.Exit(code=1) from exc
 
-    if any(result.status is ExecutionStatus.FAILED for result in results.values()):
+    if any(result.status is ExecutionStatus.FAILED for result in all_results):
         raise typer.Exit(code=1)
 
 

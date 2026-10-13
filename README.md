@@ -1,6 +1,6 @@
 # Rollout
 
-Rollout discovers SQL models from the filesystem, validates their dependencies, generates a DAG in Markdown, and materializes SQL models as tables in DuckDB.
+Rollout executes Python Seeders and SQL Models from a project directory in DuckDB, validates Model dependencies, and reports execution and quality results in Markdown.
 
 ## Quick start
 
@@ -14,27 +14,64 @@ uv run rollout run
 uv run pytest
 ```
 
-The default model directory is `models/`. To use another directory:
+The default project directory is `.`. Each project contains required `models/` and optional `seeders/` directories. To use another project:
 
 ```bash
-uv run rollout dag --models-dir path/to/models --output dag.md
+uv run rollout dag --project-dir examples/basic --output dag.md
+uv run rollout run --project-dir examples/basic
 ```
 
 Without `--output`, Markdown is written to stdout. Progress messages and errors are written to stderr.
 
+## Seeders and project structure
+
+```text
+project/
+├── seeders/
+│   ├── source.py
+│   └── source.yaml
+└── models/
+    ├── silver/
+    │   └── orders.sql
+    └── gold/
+        └── summary.sql
+```
+
+A Seeder is a Python file with a required sibling `.yaml` declaring its outputs. Seeders are discovered recursively in sorted path order; output names must be unique across the project. Each Seeder defines `run(connection, staging_dir)` and returns a Python dict mapping exactly its declared names to DuckDB relations:
+
+```python
+def run(connection, staging_dir):
+    return {"orders": connection.sql("SELECT 1 AS order_id")}
+```
+
+```yaml
+outputs:
+  orders:
+    quality:
+      - type: row_count
+        min: 1
+        severity: ERROR
+```
+
+Rollout owns the `staging` schema; Models cannot be placed in `models/staging/`. Seeders always use FULL table replacement, with a separate transaction per output. Built-in and custom SQL quality checks use the same rules as Models: ERROR failures roll back that output, while WARNING failures commit. Successful outputs remain committed when another output fails. Later Seeders and Models continue after Seeder failures; a Python or output-contract failure produces no output results.
+
+`staging_dir` is a fresh temporary filesystem directory, available through Python execution, lazy relation materialization, and quality checks, then removed even on failure. Seeders can use it for downloaded files or Parquet; it is separate from the warehouse's `staging` schema. Seeders and Models share the same open warehouse connection. Seeder output materialization does not create generated SQL artifacts.
+
+The DAG and Mermaid execution lineage remain Model-only. References to `staging.*` appear as dashed external dependencies. Failed Seeder outputs do not automatically block Models; DuckDB determines whether referenced staging tables are available. Seeder aggregate status records whether Python execution and all outputs succeeded; individual dataset results remain authoritative.
+
 ## SQL execution
 
-`rollout run` builds and validates the DAG once, then executes models in its stored order. The warehouse is created at `.rollout/warehouse.duckdb`, relative to the current working directory. Use `--models-dir PATH` to select another model directory.
+`rollout run` opens one DuckDB connection, discovers and executes Seeders in sorted path order, then discovers Models, builds and validates their DAG once, and executes Models in its stored order. The warehouse is created at `.rollout/warehouse.duckdb`, relative to the current working directory. Use `--project-dir PATH` to select another project.
 
 By default, each model uses FULL materialization: `CREATE OR REPLACE TABLE "schema"."model" AS` followed by its original SQL. Schemas are prepared once before model execution begins. Each table replacement runs in its own transaction. Success commits the transaction; failure rolls it back, preserving any previously materialized table. Unqualified table references resolve in `public` first, then DuckDB's `main` schema. External sources must already be accessible in the warehouse or through the model's SQL.
 
 Non-FULL load strategies initialize a missing target with the full dataset produced by the model SQL, using `CREATE TABLE "schema"."model" AS` followed by the original SQL. Once the target exists, including an empty table, Rollout applies the configured load strategy. Bootstrap and quality checks share the per-model transaction; an ERROR quality failure rolls back the newly created table.
 
-Failed or skipped local dependencies cause a model to be skipped, even if an older table exists. Independent branches continue executing. Results remain in memory and the CLI prints SUCCESS (🟢), FAILED (🔴), and SKIPPED (🟡) results with totals. The command exits with code 1 if a model fails or the DAG cannot be validated. Execution status is not persisted. Each run saves generated SQL under `.rollout/models/<UTC timestamp>/<schema>/<model>.sql`. Files contain the exact materialization SQL sent to DuckDB, including the original model SQL. Replaying an artifact requires its target schema to exist; Rollout prepares schemas separately. SQL is saved before execution, so failed models can be inspected too; skipped models have no file. An error saving generated SQL is logged as a warning and does not prevent execution. When using a custom warehouse path from Python, artifacts are stored beside the warehouse. These debug artifacts are retained; no automatic cleanup is performed.
+Failed or skipped local dependencies cause a model to be skipped, even if an older table exists. Independent branches continue executing. Results remain in memory and the CLI prints SUCCESS (🟢), FAILED (🔴), and SKIPPED (🟡) results with totals. The command exits with code 1 if a Seeder, Seeder output, or Model fails, or project setup or validation fails. Execution status is not persisted. Each run saves generated SQL under `.rollout/models/<UTC timestamp>/<schema>/<model>.sql`. Files contain the exact materialization SQL sent to DuckDB, including the original model SQL. Replaying an artifact requires its target schema to exist; Rollout prepares schemas separately. SQL is saved before execution, so failed models can be inspected too; skipped models have no file. An error saving generated SQL is logged as a warning and does not prevent execution. When using a custom warehouse path from Python, artifacts are stored beside the warehouse. These debug artifacts are retained; no automatic cleanup is performed.
 
 Use `rollout --verbose run` to see each model's file, dependencies, generated SQL path, transaction outcome, and blocking dependencies when skipped. The SQL body is not printed in verbose logs. Execution logs start with the model count and warehouse path. The console summary uses green for success, red for failure, and yellow for skipped models. Colors are automatically omitted when output is redirected.
 
-After execution, Rollout saves a Markdown report in `.rollout/runs/` using a UTC filename such as `20261011T000332.123456Z.md`. Reports include the UTC run start and finish times, total elapsed execution duration, summary, root failures, model results, full failure diagnostics, and execution lineage. Mermaid nodes show execution status and duration; skipped models have no duration.
+After execution, Rollout saves a Markdown report in `.rollout/runs/` using a UTC filename such as `20261011T000332.123456Z.md`. Reports include the UTC run start and finish times, total elapsed execution duration, summary, Seeder results and Python/total durations, Seeder outputs, Model results, dataset quality details, full failure diagnostics, and execution lineage. Mermaid nodes show execution status and duration; skipped models have no duration.
 
 Use `rollout run --output run.md` (or `-o run.md`) to save to an explicit path instead. Automatic save failures emit a warning and preserve the execution exit status. A failure writing an explicitly requested output returns a CLI error; model results remain unchanged.
 
@@ -126,13 +163,13 @@ Discovery, parsing, DAG construction, and rendering return data without writing 
 
 ## CLI
 
-`rollout dag` validates SQL dependencies and generates a Markdown DAG. `rollout run` validates the same DAG and executes its SQL models in DuckDB.
+`rollout dag` validates SQL dependencies and generates a Markdown DAG. `rollout run` executes Seeders before validating and executing the Model DAG in DuckDB.
 
 | Option | Description | Default |
 | --- | --- | --- |
-| `--models-dir PATH` | Directory containing SQL models. | `models/` |
+| `--project-dir PATH` | Project containing `models/` and optional `seeders/`. | `.` |
 | `--output PATH`, `-o PATH` | Save Markdown to a file. | stdout |
-| `--verbose`, `-v` (before the command) | Show per-model debug messages. | Disabled |
+| `--verbose`, `-v` (before the command) | Show Seeder and Model debug messages. | Disabled |
 | `--help` | Show command usage and options. | — |
 
 ```bash

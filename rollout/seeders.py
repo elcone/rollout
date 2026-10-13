@@ -1,15 +1,34 @@
 import hashlib
 import importlib.util
+import logging
 import sys
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import perf_counter
 from uuid import uuid4
 
 import duckdb
 
-from rollout.execution import ModelResult, execute_dataset, quote_identifier
+from rollout.execution import (
+    ExecutionStatus,
+    ModelResult,
+    execute_dataset,
+    quote_identifier,
+)
 from rollout.models import STAGING_SCHEMA, ModelId, Seeder
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SeederResult:
+    status: ExecutionStatus
+    error: str | None
+    execution_duration: float | None
+    total_duration: float
+    outputs: dict[ModelId, ModelResult]
 
 
 def run_seeder(
@@ -84,13 +103,25 @@ def _materialize_output(
 def execute_seeder(
     seeder: Seeder,
     connection: duckdb.DuckDBPyConnection,
-) -> dict[ModelId, ModelResult]:
+) -> SeederResult:
+    started = perf_counter()
+    logger.info("Executing seeder %s", seeder.path)
+    logger.debug("Declared outputs: %s", ", ".join(map(str, seeder.output_ids)))
+    error = None
     results: dict[ModelId, ModelResult] = {}
     with TemporaryDirectory(prefix="rollout-seeder-") as directory:
-        outputs = run_seeder(seeder, connection, Path(directory))
-        connection.execute(
-            f"CREATE SCHEMA IF NOT EXISTS {quote_identifier(STAGING_SCHEMA)}"
-        )
+        logger.debug("Temporary staging directory: %s", directory)
+        execution_started = perf_counter()
+        try:
+            outputs = run_seeder(seeder, connection, Path(directory))
+        except RuntimeError as exc:
+            error = str(exc)
+            outputs = {}
+        execution_duration = perf_counter() - execution_started
+        if error is None:
+            connection.execute(
+                f"CREATE SCHEMA IF NOT EXISTS {quote_identifier(STAGING_SCHEMA)}"
+            )
         for name, relation in outputs.items():
             identity = ModelId(STAGING_SCHEMA, name)
             results[identity] = execute_dataset(
@@ -99,4 +130,16 @@ def execute_seeder(
                 partial(_materialize_output, connection, identity, relation),
                 seeder.config.outputs[name].quality,
             )
-    return results
+    status = (
+        ExecutionStatus.FAILED
+        if error is not None
+        or any(result.status is ExecutionStatus.FAILED for result in results.values())
+        else ExecutionStatus.SUCCESS
+    )
+    logger.info("Seeder %s %s", seeder.path, status.value.lower())
+    if error is not None:
+        logger.error("%s", error)
+    logger.debug("Temporary staging cleaned for %s", seeder.path)
+    return SeederResult(
+        status, error, execution_duration, perf_counter() - started, results
+    )

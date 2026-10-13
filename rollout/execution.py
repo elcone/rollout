@@ -205,47 +205,55 @@ def execute_models(
     if engine_config is None:
         engine_config = EngineConfig()
 
+    with connect(engine_config) as connection:
+        return execute_models_with_connection(connection, dag, engine_config)
+
+
+def execute_models_with_connection(
+    connection: duckdb.DuckDBPyConnection,
+    dag: DAG,
+    engine_config: EngineConfig,
+) -> dict[ModelId, ModelResult]:
     path = engine_config.warehouse_path
     logger.info("Starting execution of %d models in %s", len(dag.order), path)
     results: dict[ModelId, ModelResult] = {}
 
-    with connect(engine_config) as connection:
-        prepare_schemas(connection, dag)
-        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-        run_dir = path.parent / "models" / timestamp
-        logger.info("Generated model SQL directory: %s", run_dir)
+    prepare_schemas(connection, dag)
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+    run_dir = path.parent / "models" / timestamp
+    logger.info("Generated model SQL directory: %s", run_dir)
 
-        for identity in dag.order:
-            local_dependencies = dag.dependencies[identity] & dag.internal_nodes
-            blocked_dependencies = sorted(
-                dependency
-                for dependency in local_dependencies
-                if results[dependency].status is not ExecutionStatus.SUCCESS
+    for identity in dag.order:
+        local_dependencies = dag.dependencies[identity] & dag.internal_nodes
+        blocked_dependencies = sorted(
+            dependency
+            for dependency in local_dependencies
+            if results[dependency].status is not ExecutionStatus.SUCCESS
+        )
+
+        if blocked_dependencies:
+            logger.info("Skipped %s: a local dependency did not succeed", identity)
+            logger.debug(
+                "Blocking dependencies for %s: %s",
+                identity,
+                ", ".join(
+                    f"{dependency} ({results[dependency].status.value})"
+                    for dependency in blocked_dependencies
+                ),
             )
+            results[identity] = ModelResult(ExecutionStatus.SKIPPED)
+            continue
 
-            if blocked_dependencies:
-                logger.info("Skipped %s: a local dependency did not succeed", identity)
-                logger.debug(
-                    "Blocking dependencies for %s: %s",
-                    identity,
-                    ", ".join(
-                        f"{dependency} ({results[dependency].status.value})"
-                        for dependency in blocked_dependencies
-                    ),
-                )
-                results[identity] = ModelResult(ExecutionStatus.SKIPPED)
-                continue
-
-            model = dag.models[identity]
-            strategy = model.config.load_strategy
-            if strategy is LoadStrategy.FULL:
-                sql = build_model_sql(model)
-            else:
-                sql = build_model_sql(
-                    model, target_exists=target_table_exists(connection, model)
-                )
-            sql_path = run_dir / identity.schema / f"{identity.name}.sql"
-            save_generated_sql(sql, sql_path)
-            results[identity] = execute_model(connection, model, sql)
+        model = dag.models[identity]
+        strategy = model.config.load_strategy
+        if strategy is LoadStrategy.FULL:
+            sql = build_model_sql(model)
+        else:
+            sql = build_model_sql(
+                model, target_exists=target_table_exists(connection, model)
+            )
+        sql_path = run_dir / identity.schema / f"{identity.name}.sql"
+        save_generated_sql(sql, sql_path)
+        results[identity] = execute_model(connection, model, sql)
 
     return results

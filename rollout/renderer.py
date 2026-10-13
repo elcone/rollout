@@ -15,6 +15,7 @@ from rollout.dag import DAG
 from rollout.execution import ExecutionStatus, ModelResult
 from rollout.models import ModelId
 from rollout.quality import CheckStatus
+from rollout.seeders import SeederResult
 
 _EXPECTATION_SYMBOLS = {
     ExpectationOperator.GT: ">",
@@ -151,37 +152,40 @@ def render_execution_markdown(
     started_at: datetime,
     finished_at: datetime,
     total_duration: float,
+    seeder_results: dict[str, SeederResult] | None = None,
 ) -> str:
-    failed = [
-        node for node in dag.order if results[node].status is ExecutionStatus.FAILED
-    ]
+    seeder_results = seeder_results or {}
+    output_results = {
+        node: result
+        for seeder in seeder_results.values()
+        for node, result in seeder.outputs.items()
+    }
+    dataset_results = {**output_results, **{node: results[node] for node in dag.order}}
+    all_results = [*seeder_results.values(), *dataset_results.values()]
     summary = [
-        (label, sum(results[node].status is status for node in dag.order))
+        (label, sum(result.status is status for result in all_results))
         for status, label in (
             (ExecutionStatus.SUCCESS, "Successful"),
             (ExecutionStatus.FAILED, "Failed"),
             (ExecutionStatus.SKIPPED, "Skipped"),
         )
     ]
-    models = []
-    for node in dag.order:
-        result = results[node]
-        models.append(
-            {
-                "name": _table_cell(str(node)),
-                "status": result.status.value,
-                "quality": _quality_summary(result),
-                "duration": f"{result.duration:.2f}s"
-                if result.duration is not None
-                else "—",
-                "error": "See failure details"
-                if result.status is ExecutionStatus.FAILED
-                else "",
-            }
-        )
+    dataset_rows = {}
+    for node, result in dataset_results.items():
+        dataset_rows[node] = {
+            "name": _table_cell(str(node)),
+            "status": result.status.value,
+            "quality": _quality_summary(result),
+            "duration": f"{result.duration:.2f}s"
+            if result.duration is not None
+            else "—",
+            "error": "See failure details"
+            if result.status is ExecutionStatus.FAILED
+            else "",
+        }
     quality_details = []
-    for node in dag.order:
-        for result in results[node].quality_results:
+    for node, dataset_result in dataset_results.items():
+        for result in dataset_result.quality_results:
             check = result.check
             if isinstance(check, CustomSqlCheck):
                 name = check.name
@@ -218,14 +222,42 @@ def render_execution_markdown(
                 }
             )
     failures = []
-    for node in failed:
-        error = results[node].error or "No error message available."
+    for node, result in dataset_results.items():
+        if result.status is not ExecutionStatus.FAILED:
+            continue
+        error = result.error or "No error message available."
         failures.append(
             {
                 "name": str(node),
                 "error": "\n".join(f"    {line}" for line in error.splitlines()),
             }
         )
+
+    for name, result in seeder_results.items():
+        if result.error is not None:
+            failures.append(
+                {
+                    "name": f"Seeder {_table_cell(name)} failed before outputs",
+                    "error": "\n".join(
+                        f"    {line}" for line in result.error.splitlines()
+                    ),
+                }
+            )
+
+    seeder_rows = [
+        {
+            "name": _table_cell(name),
+            "status": result.status.value,
+            "execution_duration": f"{result.execution_duration:.2f}s"
+            if result.execution_duration is not None
+            else "—",
+            "total_duration": f"{result.total_duration:.2f}s",
+            "error": _table_cell(result.error) if result.error else "",
+        }
+        for name, result in seeder_results.items()
+    ]
+    output_rows = [dataset_rows[node] for node in output_results]
+    models = [dataset_rows[node] for node in dag.order]
 
     mermaid_lines = ["flowchart LR", *_mermaid_lines(dag, results)]
     mermaid_lines.extend(
@@ -245,6 +277,8 @@ def render_execution_markdown(
         total_duration=f"{total_duration:.2f}s",
         summary=summary,
         models=models,
+        seeders=seeder_rows,
+        seeder_outputs=output_rows,
         failures=failures,
         quality_details=quality_details,
         mermaid="\n".join(mermaid_lines),

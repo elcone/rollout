@@ -18,6 +18,22 @@ Duration: {{ total_duration }}
 None
 {% endfor %}
 
+## Seeder results
+
+| Seeder | Status | Python duration | Total duration | Error |
+| --- | --- | ---: | ---: | --- |
+{% for seeder in seeders %}
+| {{ seeder.name }} | {{ seeder.status }} | {{ seeder.execution_duration }} | {{ seeder.total_duration }} | {{ seeder.error }} |
+{% endfor %}
+
+## Seeder outputs
+
+| Dataset | Status | Duration | Quality | Error |
+| --- | --- | ---: | --- | --- |
+{% for output in seeder_outputs %}
+| {{ output.name }} | {{ output.status }} | {{ output.duration }} | {{ output.quality }} | {{ output.error }} |
+{% endfor %}
+
 ## Model results
 
 | Model | Status | Duration | Quality | Error |
@@ -29,7 +45,7 @@ None
 ## Quality details
 
 {% if quality_details %}
-| Model | Check | Observed | Expected | Result | Severity |
+| Dataset | Check | Observed | Expected | Result | Severity |
 | --- | --- | ---: | --- | --- | --- |
 {% for check in quality_details %}
 | {{ check.model }} | {{ check.check }} | {{ check.observed }} | {{ check.expected }} | {{ check.status }} | {{ check.severity }} |
@@ -50,6 +66,8 @@ None
 {% endfor %}
 
 ## Execution lineage
+
+The lineage is the Model DAG. Seeder outputs remain external dependencies; Seeder failures do not automatically block Models.
 
 Green: SUCCESS · Red: FAILED · Yellow: SKIPPED · Dashed: external dependency
 

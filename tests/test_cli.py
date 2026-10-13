@@ -7,13 +7,13 @@ from rollout.cli import app
 def test_dag_stdout_and_output_file(write_models, tmp_path):
     root = write_models({"report.sql": "SELECT * FROM raw.orders"})
     runner = CliRunner()
-    result = runner.invoke(app, ["dag", "--models-dir", str(root)])
+    result = runner.invoke(app, ["dag", "--project-dir", str(root.parent)])
     assert result.exit_code == 0, result.output
     assert "# Rollout DAG" in result.stdout
     assert "DAG valid" in result.stderr
     output = tmp_path / "dag.md"
     result = runner.invoke(
-        app, ["dag", "--models-dir", str(root), "--output", str(output)]
+        app, ["dag", "--project-dir", str(root.parent), "--output", str(output)]
     )
     assert result.exit_code == 0
     assert "raw.orders" in output.read_text()
@@ -56,12 +56,13 @@ def test_invalid_dag_returns_one(write_models, tmp_path, monkeypatch, command):
     result = CliRunner().invoke(app, [command])
     assert result.exit_code == 1
     assert "cycle detected" in result.stderr
-    assert not (tmp_path / ".rollout").exists()
+    if command == "dag":
+        assert not (tmp_path / ".rollout").exists()
 
 
 def test_ignores_empty_models(write_models):
     root = write_models({"empty.sql": "-- comment", "numbers.sql": "SELECT 1"})
-    result = CliRunner().invoke(app, ["dag", "--models-dir", str(root)])
+    result = CliRunner().invoke(app, ["dag", "--project-dir", str(root.parent)])
     assert result.exit_code == 0
     assert "Models: 1" in result.stdout
     assert "public.empty" not in result.stdout
@@ -97,7 +98,7 @@ def test_run_terminal_colors_and_redirected_output(write_models, tmp_path, monke
 def test_dag_output_failure_returns_one(write_models, tmp_path):
     root = write_models({"numbers.sql": "SELECT 1"})
     result = CliRunner().invoke(
-        app, ["dag", "--models-dir", str(root), "--output", str(tmp_path)]
+        app, ["dag", "--project-dir", str(root.parent), "--output", str(tmp_path)]
     )
     assert result.exit_code == 1
     assert "Error:" in result.stderr
