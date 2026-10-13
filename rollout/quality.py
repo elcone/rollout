@@ -128,15 +128,23 @@ def evaluate_check(
 def run_quality_checks(
     connection: duckdb.DuckDBPyConnection, model: Model
 ) -> Iterator[QualityCheckResult]:
-    for check in model.config.quality:
+    return run_dataset_quality_checks(connection, model.id, model.config.quality)
+
+
+def run_dataset_quality_checks(
+    connection: duckdb.DuckDBPyConnection,
+    identity: ModelId,
+    checks: tuple[QualityCheck, ...],
+) -> Iterator[QualityCheckResult]:
+    for check in checks:
         if isinstance(check, CustomSqlCheck):
             sql = check.sql
         elif isinstance(check, RowCountCheck):
-            sql = build_row_count_sql(model.id)
+            sql = build_row_count_sql(identity)
         elif isinstance(check, NullnessCheck):
-            sql = build_nullness_sql(model.id, check.column)
+            sql = build_nullness_sql(identity, check.column)
         elif isinstance(check, UniquenessCheck):
-            sql = build_uniqueness_sql(model.id, check.columns)
+            sql = build_uniqueness_sql(identity, check.columns)
         else:
             raise ValueError(f"Unsupported quality check: {type(check).__name__}")
 

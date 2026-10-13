@@ -1,17 +1,19 @@
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
+from functools import partial
 from pathlib import Path
 from time import perf_counter
 
 import duckdb
 
-from rollout.config import CheckSeverity, EngineConfig, LoadStrategy
+from rollout.config import CheckSeverity, EngineConfig, LoadStrategy, QualityCheck
 from rollout.dag import DAG
 from rollout.models import Model, ModelId
 from rollout.parser import validate_delete_predicate
-from rollout.quality import CheckStatus, QualityCheckResult, run_quality_checks
+from rollout.quality import CheckStatus, QualityCheckResult, run_dataset_quality_checks
 from rollout.sql_templates import sql_templates
 
 logger = logging.getLogger(__name__)
@@ -31,7 +33,7 @@ class ModelResult:
     quality_results: tuple[QualityCheckResult, ...] = ()
 
 
-def _quote_identifier(name: str) -> str:
+def quote_identifier(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
@@ -45,13 +47,13 @@ def connect(engine_config: EngineConfig) -> duckdb.DuckDBPyConnection:
 def prepare_schemas(connection: duckdb.DuckDBPyConnection, dag: DAG) -> None:
     schemas = {identity.schema for identity in dag.models} | {"public"}
     for schema in sorted(schemas):
-        connection.execute(f"CREATE SCHEMA IF NOT EXISTS {_quote_identifier(schema)}")
+        connection.execute(f"CREATE SCHEMA IF NOT EXISTS {quote_identifier(schema)}")
     connection.execute("SET search_path = 'public,main'")
 
 
 def build_full_sql(model: Model) -> str:
-    schema = _quote_identifier(model.id.schema)
-    table = _quote_identifier(model.id.name)
+    schema = quote_identifier(model.id.schema)
+    table = quote_identifier(model.id.name)
 
     return sql_templates.get_template("load_strategies/full.sql.j2").render(
         target=f"{schema}.{table}", model_sql=model.sql
@@ -59,8 +61,8 @@ def build_full_sql(model: Model) -> str:
 
 
 def build_delete_insert_sql(model: Model, predicate: str) -> str:
-    schema = _quote_identifier(model.id.schema)
-    table = _quote_identifier(model.id.name)
+    schema = quote_identifier(model.id.schema)
+    table = quote_identifier(model.id.name)
     return sql_templates.get_template("load_strategies/delete_insert.sql.j2").render(
         target=f"{schema}.{table}", where=predicate, model_sql=model.sql
     )
@@ -88,8 +90,8 @@ def build_model_sql(model: Model, *, target_exists: bool = False) -> str:
         return build_bootstrap_sql(model)
 
     if strategy is LoadStrategy.APPEND:
-        schema = _quote_identifier(model.id.schema)
-        table = _quote_identifier(model.id.name)
+        schema = quote_identifier(model.id.schema)
+        table = quote_identifier(model.id.name)
         return sql_templates.get_template("load_strategies/append.sql.j2").render(
             target=f"{schema}.{table}", model_sql=model.sql
         )
@@ -103,8 +105,8 @@ def build_model_sql(model: Model, *, target_exists: bool = False) -> str:
 
 
 def build_bootstrap_sql(model: Model) -> str:
-    schema = _quote_identifier(model.id.schema)
-    table = _quote_identifier(model.id.name)
+    schema = quote_identifier(model.id.schema)
+    table = quote_identifier(model.id.name)
     return sql_templates.get_template("load_strategies/bootstrap.sql.j2").render(
         target=f"{schema}.{table}", model_sql=model.sql
     )
@@ -136,14 +138,27 @@ def execute_model(
         model.id,
         ", ".join(map(str, sorted(model.dependencies))) or "None",
     )
+    return execute_dataset(
+        connection, model.id, partial(connection.execute, sql), model.config.quality
+    )
+
+
+def execute_dataset(
+    connection: duckdb.DuckDBPyConnection,
+    identity: ModelId,
+    materialize: Callable[[], object],
+    quality: tuple[QualityCheck, ...],
+) -> ModelResult:
     started = perf_counter()
     connection.execute("BEGIN TRANSACTION")
-    logger.debug("Transaction started for %s", model.id)
+    logger.debug("Transaction started for %s", identity)
 
     quality_results: list[QualityCheckResult] = []
     try:
-        connection.execute(sql)
-        quality_results.extend(run_quality_checks(connection, model))
+        materialize()
+        quality_results.extend(
+            run_dataset_quality_checks(connection, identity, quality)
+        )
         failures = [
             result
             for result in quality_results
@@ -164,8 +179,8 @@ def execute_model(
     except (duckdb.Error, ValueError) as exc:
         connection.execute("ROLLBACK")
         duration = perf_counter() - started
-        logger.debug("Transaction rolled back for %s", model.id)
-        logger.error("Failed %s: %s", model.id, exc)
+        logger.debug("Transaction rolled back for %s", identity)
+        logger.error("Failed %s: %s", identity, exc)
 
         return ModelResult(
             ExecutionStatus.FAILED, str(exc), duration, tuple(quality_results)
@@ -173,8 +188,8 @@ def execute_model(
 
     else:
         duration = perf_counter() - started
-        logger.debug("Transaction committed for %s", model.id)
-        logger.info("Materialized %s", model.id)
+        logger.debug("Transaction committed for %s", identity)
+        logger.info("Materialized %s", identity)
 
         return ModelResult(
             ExecutionStatus.SUCCESS,

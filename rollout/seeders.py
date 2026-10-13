@@ -1,11 +1,15 @@
 import hashlib
 import importlib.util
 import sys
+from functools import partial
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 import duckdb
 
-from rollout.models import Seeder
+from rollout.execution import ModelResult, execute_dataset, quote_identifier
+from rollout.models import STAGING_SCHEMA, ModelId, Seeder
 
 
 def run_seeder(
@@ -57,3 +61,42 @@ def run_seeder(
             sys.modules.pop(module_name, None)
     except Exception as exc:
         raise RuntimeError(f"Seeder execution failed for {seeder.path}: {exc}") from exc
+
+
+def _materialize_output(
+    connection: duckdb.DuckDBPyConnection,
+    identity: ModelId,
+    relation: duckdb.DuckDBPyRelation,
+) -> None:
+    source = f"_rollout_seeder_output_{uuid4().hex}"
+    connection.register(source, relation)
+    try:
+        target = (
+            f"{quote_identifier(identity.schema)}.{quote_identifier(identity.name)}"
+        )
+        connection.execute(
+            f"CREATE OR REPLACE TABLE {target} AS SELECT * FROM {quote_identifier(source)}"
+        )
+    finally:
+        connection.unregister(source)
+
+
+def execute_seeder(
+    seeder: Seeder,
+    connection: duckdb.DuckDBPyConnection,
+) -> dict[ModelId, ModelResult]:
+    results: dict[ModelId, ModelResult] = {}
+    with TemporaryDirectory(prefix="rollout-seeder-") as directory:
+        outputs = run_seeder(seeder, connection, Path(directory))
+        connection.execute(
+            f"CREATE SCHEMA IF NOT EXISTS {quote_identifier(STAGING_SCHEMA)}"
+        )
+        for name, relation in outputs.items():
+            identity = ModelId(STAGING_SCHEMA, name)
+            results[identity] = execute_dataset(
+                connection,
+                identity,
+                partial(_materialize_output, connection, identity, relation),
+                seeder.config.outputs[name].quality,
+            )
+    return results
