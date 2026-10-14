@@ -1,7 +1,6 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from enum import Enum
 from functools import partial
 from pathlib import Path
@@ -31,6 +30,7 @@ class ModelResult:
     error: str | None = None
     duration: float | None = None
     quality_results: tuple[QualityCheckResult, ...] = ()
+    materialization_duration: float | None = None
 
 
 def quote_identifier(name: str) -> str:
@@ -152,8 +152,13 @@ def execute_dataset(
     logger.debug("Transaction started for %s", identity)
 
     quality_results: list[QualityCheckResult] = []
+    materialization_duration = None
     try:
-        materialize()
+        materialization_started = perf_counter()
+        try:
+            materialize()
+        finally:
+            materialization_duration = perf_counter() - materialization_started
         quality_results.extend(
             run_dataset_quality_checks(connection, identity, quality)
         )
@@ -181,7 +186,11 @@ def execute_dataset(
         logger.error("Failed %s: %s", identity, exc)
 
         return ModelResult(
-            ExecutionStatus.FAILED, str(exc), duration, tuple(quality_results)
+            ExecutionStatus.FAILED,
+            error=str(exc),
+            duration=duration,
+            quality_results=tuple(quality_results),
+            materialization_duration=materialization_duration,
         )
 
     else:
@@ -193,32 +202,35 @@ def execute_dataset(
             ExecutionStatus.SUCCESS,
             duration=duration,
             quality_results=tuple(quality_results),
+            materialization_duration=materialization_duration,
         )
 
 
 def execute_models(
     dag: DAG,
     engine_config: EngineConfig | None = None,
+    *,
+    run_id: str,
 ) -> dict[ModelId, ModelResult]:
     if engine_config is None:
         engine_config = EngineConfig()
 
     with connect(engine_config) as connection:
-        return execute_models_with_connection(connection, dag, engine_config)
+        return execute_models_with_connection(connection, dag, engine_config, run_id)
 
 
 def execute_models_with_connection(
     connection: duckdb.DuckDBPyConnection,
     dag: DAG,
     engine_config: EngineConfig,
+    run_id: str,
 ) -> dict[ModelId, ModelResult]:
     path = engine_config.warehouse_path
     logger.info("Starting execution of %d models in %s", len(dag.order), path)
     results: dict[ModelId, ModelResult] = {}
 
     prepare_schemas(connection, dag)
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-    run_dir = path.parent / "models" / timestamp
+    run_dir = path.parent / "models" / run_id
     logger.info("Generated model SQL directory: %s", run_dir)
 
     for identity in dag.order:

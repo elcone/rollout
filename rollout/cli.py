@@ -111,8 +111,9 @@ def run(
     ] = None,
 ) -> None:
     try:
-        engine_config = EngineConfig()
         started_at = datetime.now(UTC)
+        run_id = started_at.strftime("%Y%m%dT%H%M%S.%fZ")
+        engine_config = EngineConfig()
         started = perf_counter()
         seeder_results = {}
         with connect(engine_config) as connection:
@@ -128,7 +129,9 @@ def run(
             models = discover_models(project_dir / "models")
             models = parse_models(models)
             dag = build_dag(models)
-            results = execute_models_with_connection(connection, dag, engine_config)
+            results = execute_models_with_connection(
+                connection, dag, engine_config, run_id
+            )
         finished_at = datetime.now(UTC)
         total_duration = perf_counter() - started
 
@@ -179,11 +182,12 @@ def run(
 
     report_path = output
     if report_path is None:
-        filename = finished_at.strftime("%Y%m%dT%H%M%S.%fZ.md")
+        filename = f"{run_id}.md"
         report_path = engine_config.warehouse_path.parent / "runs" / filename
     markdown = render_execution_markdown(
         dag,
         results,
+        run_id=run_id,
         started_at=started_at,
         finished_at=finished_at,
         total_duration=total_duration,

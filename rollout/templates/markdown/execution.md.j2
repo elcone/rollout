@@ -1,5 +1,6 @@
 # Rollout execution
 
+Run ID: {{ run_id }}
 Started at: {{ started_at }}
 Finished at: {{ finished_at }}
 Duration: {{ total_duration }}
@@ -28,27 +29,27 @@ None
 
 ## Seeder outputs
 
-| Dataset | Status | Duration | Quality | Error |
-| --- | --- | ---: | --- | --- |
+| Dataset | Status | Duration | Materialization | Quality | Error |
+| --- | --- | ---: | ---: | --- | --- |
 {% for output in seeder_outputs %}
-| {{ output.name }} | {{ output.status }} | {{ output.duration }} | {{ output.quality }} | {{ output.error }} |
+| {{ output.name }} | {{ output.status }} | {{ output.duration }} | {{ output.materialization_duration }} | {{ output.quality }} | {{ output.error }} |
 {% endfor %}
 
 ## Model results
 
-| Model | Status | Duration | Quality | Error |
-| --- | --- | ---: | --- | --- |
+| Model | Status | Duration | Materialization | Quality | Error |
+| --- | --- | ---: | ---: | --- | --- |
 {% for model in models %}
-| {{ model.name }} | {{ model.status }} | {{ model.duration }} | {{ model.quality }} | {{ model.error }} |
+| {{ model.name }} | {{ model.status }} | {{ model.duration }} | {{ model.materialization_duration }} | {{ model.quality }} | {{ model.error }} |
 {% endfor %}
 
 ## Quality details
 
 {% if quality_details %}
-| Dataset | Check | Observed | Expected | Result | Severity |
-| --- | --- | ---: | --- | --- | --- |
+| Dataset | Check | Observed | Expected | Result | Severity | Duration |
+| --- | --- | ---: | --- | --- | --- | ---: |
 {% for check in quality_details %}
-| {{ check.model }} | {{ check.check }} | {{ check.observed }} | {{ check.expected }} | {{ check.status }} | {{ check.severity }} |
+| {{ check.model }} | {{ check.check }} | {{ check.observed }} | {{ check.expected }} | {{ check.status }} | {{ check.severity }} | {{ check.duration }} |
 {% endfor %}
 {% else %}
 None

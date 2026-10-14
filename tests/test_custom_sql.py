@@ -212,7 +212,7 @@ def test_transactions_dependents_and_report(engine_config, value, severity, succ
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         connection.execute("CREATE TABLE data AS SELECT 99 AS id")
     dag = build_dag([parent, child])
-    results = execute_models(dag, engine_config)
+    results = execute_models(dag, engine_config, run_id="test-runZ")
     assert results[parent.id].status is (
         ExecutionStatus.SUCCESS if success else ExecutionStatus.FAILED
     )
@@ -224,10 +224,11 @@ def test_transactions_dependents_and_report(engine_config, value, severity, succ
             (2 if success else 99,)
         ]
     status = "PASS" if value == 1 else "FAIL"
+    assert results[parent.id].quality_results[0].duration >= 0
     assert results[parent.id].quality_results[0].status is CheckStatus(status)
     report = render_execution_markdown(dag, results, **RUN_TIMING)
     assert (
-        f"| main.data | completion_rate | 1 | >= {value} AND <= {value} | {status} | {severity} |"
+        f"| main.data | completion_rate | 1 | >= {value} AND <= {value} | {status} | {severity} | {results[parent.id].quality_results[0].duration:.2f}s |"
         in report
     )
     assert f"<br/>Quality: 1 {'PASS' if value == 1 else severity}" in report

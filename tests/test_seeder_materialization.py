@@ -93,7 +93,10 @@ def test_parquet_lives_through_materialization_and_quality(
     )
     result = execute_seeder(seeder, connection).outputs[ModelId("staging", "orders")]
     assert result.status is ExecutionStatus.SUCCESS
-    assert result.duration is not None and result.duration >= 0
+    assert result.duration is not None
+    assert result.materialization_duration is not None
+    assert result.duration >= result.materialization_duration >= 0
+    assert all(check.duration >= 0 for check in result.quality_results)
     assert len(result.quality_results) == 4
     assert all(check.status is CheckStatus.PASS for check in result.quality_results)
     assert connection.sql("SELECT * FROM staging.orders").fetchall() == [(1,)]

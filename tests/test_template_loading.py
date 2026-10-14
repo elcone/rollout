@@ -46,6 +46,7 @@ print(render_markdown(build_dag([])))
 from datetime import UTC, datetime
 print(render_execution_markdown(
     build_dag([]), {},
+    run_id="package-test-run",
     started_at=datetime(2026, 10, 11, 23, 13, 24, tzinfo=UTC),
     finished_at=datetime(2026, 10, 11, 23, 13, 29, tzinfo=UTC),
     total_duration=5.42,

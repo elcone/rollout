@@ -149,6 +149,7 @@ def render_execution_markdown(
     dag: DAG,
     results: dict[ModelId, ModelResult],
     *,
+    run_id: str,
     started_at: datetime,
     finished_at: datetime,
     total_duration: float,
@@ -178,6 +179,9 @@ def render_execution_markdown(
             "quality": _quality_summary(result),
             "duration": f"{result.duration:.2f}s"
             if result.duration is not None
+            else "—",
+            "materialization_duration": f"{result.materialization_duration:.2f}s"
+            if result.materialization_duration is not None
             else "—",
             "error": "See failure details"
             if result.status is ExecutionStatus.FAILED
@@ -219,6 +223,7 @@ def render_execution_markdown(
                     "expected": expected,
                     "status": result.status.value,
                     "severity": result.severity.value,
+                    "duration": f"{result.duration:.2f}s",
                 }
             )
     failures = []
@@ -272,6 +277,7 @@ def render_execution_markdown(
         mermaid_lines.append(f"    class {ids[node]} {results[node].status.value}")
 
     return _templates.get_template("execution.md.j2").render(
+        run_id=run_id,
         started_at=started_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
         finished_at=finished_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
         total_duration=f"{total_duration:.2f}s",

@@ -6,6 +6,7 @@ from rollout.renderer import render_execution_markdown
 
 
 RUN_TIMING = {
+    "run_id": "test-report-run",
     "started_at": datetime(2026, 10, 11, 23, 13, 24, tzinfo=UTC),
     "finished_at": datetime(2026, 10, 11, 23, 13, 29, tzinfo=UTC),
     "total_duration": 5.42,
@@ -24,15 +25,15 @@ def test_mixed_results_order_summary_and_lineage(model_dag):
     results = {
         skipped: ModelResult(ExecutionStatus.SKIPPED),
         failed: ModelResult(ExecutionStatus.FAILED, "Binder Error: missing", 0.084),
-        success: ModelResult(ExecutionStatus.SUCCESS, duration=0.126),
+        success: ModelResult(ExecutionStatus.SUCCESS, duration=0.126, materialization_duration=0.051),
     }
     report = render_execution_markdown(dag, results, **RUN_TIMING)
     assert "- Successful: 1\n- Failed: 1\n- Skipped: 1" in report
     rows = [line for line in report.split("## Model results", 1)[1].split("## Quality details", 1)[0].splitlines() if line.startswith("| ")][2:]
     assert rows == [
-        "| bronze.orders | SUCCESS | 0.13s | — |  |",
-        "| silver.orders | FAILED | 0.08s | — | See failure details |",
-        "| gold.sales | SKIPPED | — | — |  |",
+        "| bronze.orders | SUCCESS | 0.13s | 0.05s | — |  |",
+        "| silver.orders | FAILED | 0.08s | — | — | See failure details |",
+        "| gold.sales | SKIPPED | — | — | — |  |",
     ]
     groups = dict(re.findall(r'subgraph \w+\["([^"]+)"\]\n(.*?)    end', report, re.S))
     ids = {
@@ -73,7 +74,7 @@ def test_error_preserves_markdown_table(model_dag):
         },
         **RUN_TIMING,
     )
-    assert "| FAILED | 0.00s | — | See failure details |" in report
+    assert "| FAILED | 0.00s | — | — | See failure details |" in report
     assert "    Error | <value>\n    next line" in report
 
 
@@ -106,10 +107,13 @@ def test_run_timing_and_section_order(model_dag):
         {
             dag.order[0]: ModelResult(ExecutionStatus.SUCCESS, duration=0.14),
         },
+        run_id="explicit-report-id",
         started_at=timestamp,
         finished_at=timestamp + timedelta(seconds=5),
         total_duration=5.42,
     )
+    assert "Run ID: explicit-report-id" in report
+    assert "| Model | Status | Duration | Materialization | Quality | Error |" in report
     assert "Started at: 2026-10-11 00:03:32 UTC" in report
     assert "Finished at: 2026-10-11 00:03:37 UTC" in report
     assert "Duration: 5.42s" in report
@@ -143,7 +147,7 @@ def test_root_failures_and_details_follow_execution_order(model_dag, engine_conf
             "other/orders.sql": "SELECT CAST('invalid' AS INTEGER) AS id",
         }
     )
-    results = execute_models(dag, engine_config)
+    results = execute_models(dag, engine_config, run_id="test-runZ")
     report = render_execution_markdown(
         dag, dict(reversed(list(results.items()))), **RUN_TIMING
     )

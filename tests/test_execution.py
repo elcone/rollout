@@ -18,11 +18,13 @@ def test_success_in_stored_order(model_dag, engine_config, monkeypatch):
         raise AssertionError("Execution must reuse dag.order")
 
     monkeypatch.setattr("rollout.dag.topological_sort", unexpected_sort)
-    results = execute_models(dag, engine_config)
+    results = execute_models(dag, engine_config, run_id="test-runZ")
     assert list(results) == dag.order
     assert all(result.status is ExecutionStatus.SUCCESS for result in results.values())
     assert all(
-        isinstance(result.duration, (int, float)) and result.duration >= 0
+        result.duration is not None
+        and result.materialization_duration is not None
+        and result.duration >= result.materialization_duration >= 0
         for result in results.values()
     )
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
@@ -45,7 +47,7 @@ def test_failed_branch_blocks_descendants_and_independent_branch_continues(
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         connection.execute("CREATE SCHEMA silver")
         connection.execute("CREATE TABLE silver.report AS SELECT 99 AS stale")
-    results = execute_models(dag, engine_config)
+    results = execute_models(dag, engine_config, run_id="test-runZ")
     assert {str(identity): result.status for identity, result in results.items()} == {
         "broken.numbers": ExecutionStatus.FAILED,
         "silver.report": ExecutionStatus.SKIPPED,
@@ -59,11 +61,13 @@ def test_failed_branch_blocks_descendants_and_independent_branch_continues(
     assert "missing" in failed.error
     for result in results.values():
         if result.status is ExecutionStatus.SKIPPED:
+            assert result.materialization_duration is None
             assert result.duration is None
             assert result.error is None
         else:
             assert isinstance(result.duration, (int, float))
-            assert result.duration >= 0
+            assert result.materialization_duration is not None
+            assert result.duration >= result.materialization_duration >= 0
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         assert connection.execute("SELECT * FROM independent.report").fetchall() == [
             (42,)
@@ -83,7 +87,7 @@ def test_rollback_preserves_committed_target(model_dag, engine_config):
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         connection.execute("CREATE SCHEMA public")
         connection.execute("CREATE TABLE public.numbers AS SELECT 7 AS number")
-    results = execute_models(dag, engine_config)
+    results = execute_models(dag, engine_config, run_id="test-runZ")
     assert next(iter(results.values())).status is ExecutionStatus.FAILED
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         assert connection.execute("SELECT * FROM public.numbers").fetchall() == [(7,)]
@@ -97,7 +101,7 @@ def test_artifacts_for_attempted_models_only(model_dag, engine_config):
             "numbers.sql": "SELECT 42",
         }
     )
-    execute_models(dag, engine_config)
+    execute_models(dag, engine_config, run_id="test-runZ")
     run_dir = next((engine_config.warehouse_path.parent / "models").iterdir())
     assert (run_dir / "broken" / "numbers.sql").is_file()
     assert (run_dir / "public" / "numbers.sql").is_file()
@@ -108,7 +112,7 @@ def test_artifacts_preserve_sql_and_previous_runs(model_dag, engine_config, capl
     original = "-- original\nSELECT 1 AS number; -- trailing comment"
     dag = model_dag({"silver/numbers.sql": original})
     with caplog.at_level("DEBUG", logger="rollout"):
-        execute_models(dag, engine_config)
+        execute_models(dag, engine_config, run_id="test-runZ")
     artifacts = engine_config.warehouse_path.parent / "models"
     run_dir = next(artifacts.iterdir())
     assert run_dir.name.endswith("Z")
@@ -121,7 +125,7 @@ def test_artifacts_preserve_sql_and_previous_runs(model_dag, engine_config, capl
         connection.execute("CREATE SCHEMA silver")
         connection.execute(saved_sql)
         assert connection.execute("SELECT * FROM silver.numbers").fetchall() == [(1,)]
-    execute_models(dag, engine_config)
+    execute_models(dag, engine_config, run_id="second-runZ")
     assert len(list(artifacts.iterdir())) == 2
     assert sql_path.read_text() == saved_sql
 
@@ -148,7 +152,7 @@ def test_artifact_errors_warn_without_blocking_execution(
             raise OSError("cannot write artifact")
 
         monkeypatch.setattr(Path, "write_text", fail_write)
-    results = execute_models(dag, engine_config)
+    results = execute_models(dag, engine_config, run_id="test-runZ")
     assert {str(identity): result.status for identity, result in results.items()} == {
         "public.numbers": ExecutionStatus.SUCCESS,
         "silver.report": ExecutionStatus.SUCCESS,
@@ -189,17 +193,17 @@ def test_local_schemas_exist_before_first_model(model_dag, engine_config, monkey
         return execute(connection, model, sql)
 
     monkeypatch.setattr(execution, "execute_model", inspect_schemas)
-    execute_models(dag, engine_config)
+    execute_models(dag, engine_config, run_id="test-runZ")
     assert checked == dag.order
 
 
 def test_empty_dag_creates_warehouse(model_dag, engine_config):
-    assert execute_models(model_dag({}), engine_config) == {}
+    assert execute_models(model_dag({}), engine_config, run_id="test-runZ") == {}
     assert engine_config.warehouse_path.is_file()
 
 
 def test_default_configuration(model_dag, tmp_path, monkeypatch):
     dag = model_dag({"numbers.sql": "SELECT 1"})
     monkeypatch.chdir(tmp_path)
-    assert next(iter(execute_models(dag).values())).status is ExecutionStatus.SUCCESS
+    assert next(iter(execute_models(dag, run_id="test-runZ").values())).status is ExecutionStatus.SUCCESS
     assert (tmp_path / ".rollout" / "warehouse.duckdb").is_file()

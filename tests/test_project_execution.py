@@ -39,6 +39,8 @@ def test_project_seeder_before_model_and_shared_connection(tmp_path, monkeypatch
     with duckdb.connect(str(tmp_path / '.rollout' / 'warehouse.duckdb')) as connection:
         assert connection.sql('SELECT * FROM silver.orders').fetchall() == [(7,)]
     report = next((tmp_path / '.rollout' / 'runs').glob('*.md')).read_text()
+    assert '| Dataset | Status | Duration | Materialization | Quality | Error |' in report
+    assert '| Model | Status | Duration | Materialization | Quality | Error |' in report
     assert report.index('## Seeder results') < report.index('## Seeder outputs') < report.index('## Model results')
     graph = report.split('```mermaid')[1]
     assert 'source.py' not in graph
@@ -83,7 +85,9 @@ def test_failure_continuation_order_and_report(tmp_path, monkeypatch, failure):
     else:
         assert '| staging.good | SUCCESS |' in report
         assert ('| staging.bad | SUCCESS |' if failure == 'warning' else '| staging.bad | FAILED |') in report
-        assert '| row_count | 1 | >= 2 | FAIL |' in report
+        import re
+
+        assert re.search(r'\| row_count \| 1 \| >= 2 \| FAIL \| (ERROR|WARNING) \| \d+\.\d{2}s \|', report)
     with duckdb.connect(str(tmp_path / '.rollout' / 'warehouse.duckdb')) as connection:
         assert connection.sql('SELECT * FROM public.report').fetchall() == [(3,)]
 

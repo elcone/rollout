@@ -19,6 +19,7 @@ from rollout.quality import CheckStatus, evaluate_check, observe_numeric_scalar
 from rollout.renderer import render_execution_markdown
 
 RUN_TIMING = {
+    "run_id": "test-report-run",
     "started_at": datetime(2026, 10, 11, 23, 13, 24, tzinfo=UTC),
     "finished_at": datetime(2026, 10, 11, 23, 13, 29, tzinfo=UTC),
     "total_duration": 5.42,
@@ -147,7 +148,7 @@ def test_transactions_dependents_and_report(engine_config, severity):
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         connection.execute("CREATE TABLE main.data AS SELECT 99 AS id")
     dag = build_dag([parent, child])
-    results = execute_models(dag, engine_config)
+    results = execute_models(dag, engine_config, run_id="test-runZ")
     warning = severity == "WARNING"
     assert results[parent.id].status is (
         ExecutionStatus.SUCCESS if warning else ExecutionStatus.FAILED
@@ -155,6 +156,8 @@ def test_transactions_dependents_and_report(engine_config, severity):
     assert results[child.id].status is (
         ExecutionStatus.SUCCESS if warning else ExecutionStatus.SKIPPED
     )
+    assert all(check.duration >= 0 for check in results[parent.id].quality_results)
+    assert results[parent.id].duration >= results[parent.id].materialization_duration >= 0
     check = results[parent.id].quality_results[1]
     assert check.status is CheckStatus.FAIL
     assert check.severity is CheckSeverity(severity)
@@ -164,8 +167,8 @@ def test_transactions_dependents_and_report(engine_config, severity):
         ]
     report = render_execution_markdown(dag, results, **RUN_TIMING)
     assert f"1 PASS · 1 {severity}" in report
-    assert "## Quality details" in report
-    assert f"| main.data | row_count | 1 | >= 2 | FAIL | {severity} |" in report
+    assert "| Dataset | Check | Observed | Expected | Result | Severity | Duration |" in report
+    assert f"| main.data | row_count | 1 | >= 2 | FAIL | {severity} | {check.duration:.2f}s |" in report
     assert f"<br/>Quality: 1 PASS · 1 {severity}" in report
     child_node = next(line for line in report.splitlines() if '("child<br/>' in line)
     assert "Quality:" not in child_node
@@ -187,6 +190,7 @@ def test_quality_execution_error_rolls_back_even_for_warning():
         result = execute_model(connection, item, build_model_sql(item))
         assert result.status is ExecutionStatus.FAILED
         assert "Quality check execution error (nullness)" in result.error
+        assert result.duration >= result.materialization_duration >= 0
         assert len(result.quality_results) == 1
         assert connection.execute("SELECT * FROM data").fetchall() == [(99,)]
 

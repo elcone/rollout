@@ -31,7 +31,7 @@ def generated_sql(engine_config):
 
 def test_bootstrap_uses_model_sql_without_delete_predicate(model_dag, engine_config):
     dag = replacement_dag(model_dag, where="target.missing = 1")
-    result = next(iter(execute_models(dag, engine_config).values()))
+    result = next(iter(execute_models(dag, engine_config, run_id="test-runZ").values()))
     assert result.status is ExecutionStatus.SUCCESS
     assert target_rows(engine_config) == [(20,)]
     assert generated_sql(engine_config) == 'CREATE TABLE "public"."numbers" AS\nSELECT 20 AS number'
@@ -44,7 +44,7 @@ def test_existing_target_deletes_selected_rows_and_inserts_unfiltered_model(
     seed_target(engine_config, rows)
     original = "-- replacement\nSELECT 20 AS number; -- trailing comment"
     dag = replacement_dag(model_dag, sql=original)
-    result = next(iter(execute_models(dag, engine_config).values()))
+    result = next(iter(execute_models(dag, engine_config, run_id="test-runZ").values()))
     assert result.status is ExecutionStatus.SUCCESS
     assert target_rows(engine_config) == expected
     assert generated_sql(engine_config) == (
@@ -62,7 +62,7 @@ def test_delete_predicate_can_reference_staging_with_different_column(model_dag,
         "EXISTS (SELECT 1 FROM staging.source AS source "
         "WHERE target.number = source.operation_date)"
     ))
-    result = next(iter(execute_models(dag, engine_config).values()))
+    result = next(iter(execute_models(dag, engine_config, run_id="test-runZ").values()))
     assert result.status is ExecutionStatus.SUCCESS
     assert target_rows(engine_config) == [(1,), (20,)]
 
@@ -75,7 +75,7 @@ def test_sql_failure_restores_existing_target(model_dag, engine_config, failure)
         sql="SELECT CAST('invalid' AS INTEGER) AS number" if failure == "insert" else "SELECT 20 AS number",
         where="target.missing = 2" if failure == "delete" else "target.number = 2",
     )
-    result = next(iter(execute_models(dag, engine_config).values()))
+    result = next(iter(execute_models(dag, engine_config, run_id="test-runZ").values()))
     assert result.status is ExecutionStatus.FAILED
     assert result.error
     assert result.duration >= 0
@@ -92,7 +92,7 @@ def test_quality_controls_transaction(model_dag, engine_config, severity, status
     seed_target(engine_config)
     quality = f"quality:\n  - type: row_count\n    severity: {severity}\n    min: 3\n"
     dag = replacement_dag(model_dag, quality=quality)
-    result = next(iter(execute_models(dag, engine_config).values()))
+    result = next(iter(execute_models(dag, engine_config, run_id="test-runZ").values()))
     assert result.status is status
     assert len(result.quality_results) == 1
     assert result.quality_results[0].observed_value == 2
@@ -101,7 +101,7 @@ def test_quality_controls_transaction(model_dag, engine_config, severity, status
 
 def test_bootstrap_quality_error_removes_new_table(model_dag, engine_config):
     dag = replacement_dag(model_dag, quality="quality:\n  - type: row_count\n    severity: ERROR\n    min: 2\n")
-    result = next(iter(execute_models(dag, engine_config).values()))
+    result = next(iter(execute_models(dag, engine_config, run_id="test-runZ").values()))
     assert result.status is ExecutionStatus.FAILED
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         assert connection.execute(
@@ -125,7 +125,7 @@ def test_quoted_target_bootstraps_then_uses_delete_insert(model_dag, engine_conf
         'a"b/x"y.yaml': "load_strategy: DELETE_INSERT\ndelete_insert:\n  where: target.number = 20\n",
     })
     for _ in range(2):
-        result = next(iter(execute_models(dag, engine_config).values()))
+        result = next(iter(execute_models(dag, engine_config, run_id="test-runZ").values()))
         assert result.status is ExecutionStatus.SUCCESS
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         assert connection.execute('SELECT * FROM "a""b"."x""y"').fetchall() == [(20,)]
@@ -146,7 +146,7 @@ def test_invalid_predicate_is_rejected_before_loading(
         seed_target(engine_config)
     dag = replacement_dag(model_dag, where=predicate)
     with pytest.raises(ValueError, match="Invalid delete_insert.where"):
-        execute_models(dag, engine_config)
+        execute_models(dag, engine_config, run_id="test-runZ")
     if existing:
         assert target_rows(engine_config) == [(1,), (2,)]
     else:

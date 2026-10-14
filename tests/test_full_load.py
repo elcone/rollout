@@ -61,7 +61,7 @@ def test_execution_uses_model_sql_selection(model_dag, engine_config, monkeypatc
 
     monkeypatch.setattr(execution, "build_model_sql", track_selection)
     monkeypatch.setattr(execution, "target_table_exists", unexpected_existence_check)
-    results = execute_models(dag, engine_config)
+    results = execute_models(dag, engine_config, run_id="test-runZ")
     assert calls == dag.order
     assert all(result.status is ExecutionStatus.SUCCESS for result in results.values())
     sql_path = next(
@@ -72,10 +72,10 @@ def test_execution_uses_model_sql_selection(model_dag, engine_config, monkeypatc
 
 def test_full_replaces_entire_table(model_dag, engine_config):
     dag = model_dag({"numbers.sql": "SELECT 1 AS number UNION ALL SELECT 2"})
-    execute_models(dag, engine_config)
+    execute_models(dag, engine_config, run_id="test-runZ")
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         connection.execute("INSERT INTO public.numbers VALUES (3)")
-    execute_models(dag, engine_config)
+    execute_models(dag, engine_config, run_id="test-runZ")
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         assert connection.execute(
             "SELECT * FROM public.numbers ORDER BY number"
@@ -88,7 +88,7 @@ def test_quoted_target_materializes_from_external_source(model_dag, engine_confi
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         connection.execute("CREATE SCHEMA raw")
         connection.execute("CREATE TABLE raw.numbers AS SELECT 5 AS number")
-    results = execute_models(dag, engine_config)
+    results = execute_models(dag, engine_config, run_id="test-runZ")
     assert next(iter(results.values())).status is ExecutionStatus.SUCCESS
     with duckdb.connect(str(engine_config.warehouse_path)) as connection:
         assert connection.execute('SELECT * FROM "a""b"."x""y"').fetchall() == [(5,)]

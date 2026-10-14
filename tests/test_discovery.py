@@ -174,7 +174,7 @@ def test_loaded_quality_runs_during_execution(write_models, engine_config):
         }
     )
     dag = build_dag(parse_models(discover_models(root)))
-    results = execute_models(dag, engine_config)
+    results = execute_models(dag, engine_config, run_id="test-runZ")
     parent = results[ModelId("public", "numbers")]
     assert parent.status is ExecutionStatus.FAILED
     assert parent.quality_results[0].status is CheckStatus.FAIL

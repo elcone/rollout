@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 from numbers import Real
+from time import perf_counter
 
 import duckdb
 from sqlglot.errors import SqlglotError
@@ -42,6 +43,7 @@ class QualityCheckResult:
     status: CheckStatus
     severity: CheckSeverity
     observed_value: int | float | Decimal
+    duration: float
     message: str | None = None
 
 
@@ -137,6 +139,7 @@ def run_dataset_quality_checks(
     checks: tuple[QualityCheck, ...],
 ) -> Iterator[QualityCheckResult]:
     for check in checks:
+        started = perf_counter()
         if isinstance(check, CustomSqlCheck):
             sql = check.sql
         elif isinstance(check, RowCountCheck):
@@ -165,4 +168,5 @@ def run_dataset_quality_checks(
             CheckStatus.PASS if passed else CheckStatus.FAIL,
             check.severity,
             observed,
+            duration=perf_counter() - started,
         )

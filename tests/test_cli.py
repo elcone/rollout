@@ -131,7 +131,7 @@ def test_run_output_report_after_execution(write_models, tmp_path, monkeypatch, 
     if fails:
         assert "| broken.orders | FAILED |" in report
         assert "missing" in report
-        assert "| gold.report | SKIPPED | — | — |  |" in report
+        assert "| gold.report | SKIPPED | — | — | — |  |" in report
 
 
 def test_run_report_write_failure_returns_one_after_execution(
@@ -160,8 +160,10 @@ def test_automatic_report_location_filename_and_previous_runs(
     content = first.read_text()
     assert re.fullmatch(r"\d{8}T\d{6}\.\d{6}Z.md", first.name)
     timestamp = datetime.strptime(first.name, "%Y%m%dT%H%M%S.%fZ.md")
-    assert f"Finished at: {timestamp:%Y-%m-%d %H:%M:%S} UTC" in content
-    assert "Started at:" in content
+    assert f"Started at: {timestamp:%Y-%m-%d %H:%M:%S} UTC" in content
+    assert f"Run ID: {first.stem}" in content
+    assert (tmp_path / ".rollout" / "models" / first.stem / "public" / "numbers.sql").is_file()
+    assert not (tmp_path / ".rollout" / "state.duckdb").exists()
     assert re.search(r"^Duration: \d+\.\d{2}s$", content, re.M)
     assert "Generated at" not in content
     assert runner.invoke(app, ["run"]).exit_code == 0

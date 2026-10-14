@@ -36,7 +36,7 @@ def generated_sql(engine_config):
 
 def test_bootstrap_creates_target_and_saves_sql(model_dag, engine_config):
     dag = append_dag(model_dag, sql="SELECT 1 AS number")
-    result = next(iter(execute_models(dag, engine_config).values()))
+    result = next(iter(execute_models(dag, engine_config, run_id="test-runZ").values()))
     assert result.status is ExecutionStatus.SUCCESS
     assert target_rows(engine_config) == [(1,)]
     assert generated_sql(engine_config) == (
@@ -50,7 +50,7 @@ def test_existing_target_appends_and_saves_insert_sql(
 ):
     seed_target(engine_config, rows)
     dag = append_dag(model_dag)
-    result = next(iter(execute_models(dag, engine_config).values()))
+    result = next(iter(execute_models(dag, engine_config, run_id="test-runZ").values()))
     assert result.status is ExecutionStatus.SUCCESS
     assert target_rows(engine_config) == expected
     assert generated_sql(engine_config) == (
@@ -60,8 +60,8 @@ def test_existing_target_appends_and_saves_insert_sql(
 
 def test_repeated_execution_appends_duplicates(model_dag, engine_config):
     dag = append_dag(model_dag)
-    for _ in range(2):
-        result = next(iter(execute_models(dag, engine_config).values()))
+    for run in range(2):
+        result = next(iter(execute_models(dag, engine_config, run_id=f"test-run-{run}").values()))
         assert result.status is ExecutionStatus.SUCCESS
     assert target_rows(engine_config) == [(2,), (2,)]
     artifacts = list(
@@ -77,7 +77,7 @@ def test_repeated_execution_appends_duplicates(model_dag, engine_config):
 def test_insert_failure_preserves_existing_rows(model_dag, engine_config):
     seed_target(engine_config)
     dag = append_dag(model_dag, sql="SELECT 'invalid' AS number")
-    result = next(iter(execute_models(dag, engine_config).values()))
+    result = next(iter(execute_models(dag, engine_config, run_id="test-runZ").values()))
     assert result.status is ExecutionStatus.FAILED
     assert result.error
     assert target_rows(engine_config) == [(1,)]
@@ -94,7 +94,7 @@ def test_quality_controls_append_transaction(
     seed_target(engine_config)
     quality = f"quality:\n  - type: row_count\n    severity: {severity}\n    min: 3\n"
     dag = append_dag(model_dag, quality=quality)
-    result = next(iter(execute_models(dag, engine_config).values()))
+    result = next(iter(execute_models(dag, engine_config, run_id="test-runZ").values()))
     assert result.status is status
     assert len(result.quality_results) == 1
     assert result.quality_results[0].status is CheckStatus.FAIL
@@ -105,7 +105,7 @@ def test_quality_controls_append_transaction(
 def test_bootstrap_quality_error_removes_new_target(model_dag, engine_config):
     quality = "quality:\n  - type: row_count\n    severity: ERROR\n    min: 2\n"
     result = next(iter(execute_models(
-        append_dag(model_dag, quality=quality), engine_config
+        append_dag(model_dag, quality=quality), engine_config, run_id="test-runZ"
     ).values()))
     assert result.status is ExecutionStatus.FAILED
     assert result.quality_results[0].observed_value == 1
