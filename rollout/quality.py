@@ -31,6 +31,15 @@ OPERATORS = {
     ExpectationOperator.LTE: operator.le,
 }
 
+_EXPECTATION_SYMBOLS = {
+    ExpectationOperator.GT: ">",
+    ExpectationOperator.GTE: ">=",
+    ExpectationOperator.EQ: "=",
+    ExpectationOperator.NEQ: "<>",
+    ExpectationOperator.LT: "<",
+    ExpectationOperator.LTE: "<=",
+}
+
 
 class CheckStatus(Enum):
     PASS = "PASS"
@@ -45,6 +54,34 @@ class QualityCheckResult:
     observed_value: int | float | Decimal
     duration: float
     message: str | None = None
+
+
+def quality_check_details(check: QualityCheck) -> tuple[str, str]:
+    if isinstance(check, CustomSqlCheck):
+        name = check.name
+    elif isinstance(check, NullnessCheck):
+        name = f"nullness({check.column})"
+    elif isinstance(check, UniquenessCheck):
+        name = f"uniqueness({', '.join(check.columns)})"
+    elif isinstance(check, RowCountCheck):
+        name = "row_count"
+    else:
+        raise ValueError(f"Unsupported quality check: {type(check).__name__}")
+    if isinstance(check, CustomSqlCheck):
+        expected = " AND ".join(
+            f"{_EXPECTATION_SYMBOLS[item.operator]} "
+            f"{str(item.value).removesuffix('.0')}"
+            for item in check.expectations
+        )
+    elif isinstance(check, RowCountCheck):
+        expected = f">= {check.min}"
+    elif isinstance(check, NullnessCheck):
+        expected = f"<= {check.max}"
+    elif isinstance(check, UniquenessCheck):
+        expected = f"<= {check.max}"
+    else:
+        raise ValueError(f"Unsupported quality check: {type(check).__name__}")
+    return name, expected
 
 
 def _quote_identifier(name: str) -> str:

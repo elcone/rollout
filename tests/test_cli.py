@@ -162,8 +162,10 @@ def test_automatic_report_location_filename_and_previous_runs(
     timestamp = datetime.strptime(first.name, "%Y%m%dT%H%M%S.%fZ.md")
     assert f"Started at: {timestamp:%Y-%m-%d %H:%M:%S} UTC" in content
     assert f"Run ID: {first.stem}" in content
-    assert (tmp_path / ".rollout" / "models" / first.stem / "public" / "numbers.sql").is_file()
-    assert not (tmp_path / ".rollout" / "state.duckdb").exists()
+    assert (
+        tmp_path / ".rollout" / "models" / first.stem / "public" / "numbers.sql"
+    ).is_file()
+    assert (tmp_path / ".rollout" / "state.jsonl").exists()
     assert re.search(r"^Duration: \d+\.\d{2}s$", content, re.M)
     assert "Generated at" not in content
     assert runner.invoke(app, ["run"]).exit_code == 0

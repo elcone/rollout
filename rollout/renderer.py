@@ -4,27 +4,11 @@ from html import escape
 
 from jinja2 import Environment, PackageLoader
 
-from rollout.config import (
-    CustomSqlCheck,
-    ExpectationOperator,
-    NullnessCheck,
-    RowCountCheck,
-    UniquenessCheck,
-)
 from rollout.dag import DAG
 from rollout.execution import ExecutionStatus, ModelResult
 from rollout.models import ModelId
-from rollout.quality import CheckStatus
+from rollout.quality import CheckStatus, quality_check_details
 from rollout.seeders import SeederResult
-
-_EXPECTATION_SYMBOLS = {
-    ExpectationOperator.GT: ">",
-    ExpectationOperator.GTE: ">=",
-    ExpectationOperator.EQ: "=",
-    ExpectationOperator.NEQ: "<>",
-    ExpectationOperator.LT: "<",
-    ExpectationOperator.LTE: "<=",
-}
 
 logger = logging.getLogger(__name__)
 _templates = Environment(
@@ -190,31 +174,7 @@ def render_execution_markdown(
     quality_details = []
     for node, dataset_result in dataset_results.items():
         for result in dataset_result.quality_results:
-            check = result.check
-            if isinstance(check, CustomSqlCheck):
-                name = check.name
-            elif isinstance(check, NullnessCheck):
-                name = f"nullness({check.column})"
-            elif isinstance(check, UniquenessCheck):
-                name = f"uniqueness({', '.join(check.columns)})"
-            elif isinstance(check, RowCountCheck):
-                name = "row_count"
-            else:
-                raise ValueError(f"Unsupported quality check: {type(check).__name__}")
-            if isinstance(check, CustomSqlCheck):
-                expected = " AND ".join(
-                    f"{_EXPECTATION_SYMBOLS[item.operator]} "
-                    f"{str(item.value).removesuffix('.0')}"
-                    for item in check.expectations
-                )
-            elif isinstance(check, RowCountCheck):
-                expected = f">= {check.min}"
-            elif isinstance(check, NullnessCheck):
-                expected = f"<= {check.max}"
-            elif isinstance(check, UniquenessCheck):
-                expected = f"<= {check.max}"
-            else:
-                raise ValueError(f"Unsupported quality check: {type(check).__name__}")
+            name, expected = quality_check_details(result.check)
             quality_details.append(
                 {
                     "model": _table_cell(str(node)),

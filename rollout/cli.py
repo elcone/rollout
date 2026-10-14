@@ -15,6 +15,7 @@ from rollout.execution import ExecutionStatus, connect, execute_models_with_conn
 from rollout.parser import parse_models
 from rollout.renderer import render_execution_markdown, render_markdown
 from rollout.seeders import execute_seeder
+from rollout.state import persist_run_state
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(
@@ -203,8 +204,27 @@ def run(
         logger.info("Wrote execution report to %s", report_path)
     except OSError as exc:
         logger.warning("Could not save execution report to %s: %s", report_path, exc)
-        if output is not None:
-            raise typer.Exit(code=1) from exc
+        report_failed = output is not None
+    else:
+        report_failed = False
+
+    state_path = engine_config.warehouse_path.parent / "state.jsonl"
+    try:
+        persist_run_state(
+            state_path,
+            run_id=run_id,
+            started_at=started_at,
+            finished_at=finished_at,
+            total_duration=total_duration,
+            dag=dag,
+            results=results,
+            seeder_results=seeder_results,
+        )
+    except OSError as exc:
+        logger.warning("Could not persist run state to %s: %s", state_path, exc)
+
+    if report_failed:
+        raise typer.Exit(code=1)
 
     if any(result.status is ExecutionStatus.FAILED for result in all_results):
         raise typer.Exit(code=1)

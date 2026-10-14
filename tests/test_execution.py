@@ -61,10 +61,16 @@ def test_failed_branch_blocks_descendants_and_independent_branch_continues(
     assert "missing" in failed.error
     for result in results.values():
         if result.status is ExecutionStatus.SKIPPED:
+            assert result.started_at is None
+            assert result.finished_at is None
             assert result.materialization_duration is None
             assert result.duration is None
             assert result.error is None
         else:
+            assert result.started_at is not None
+            assert result.finished_at >= result.started_at
+            assert result.started_at.utcoffset().total_seconds() == 0
+            assert result.finished_at.utcoffset().total_seconds() == 0
             assert isinstance(result.duration, (int, float))
             assert result.materialization_duration is not None
             assert result.duration >= result.materialization_duration >= 0
@@ -205,5 +211,8 @@ def test_empty_dag_creates_warehouse(model_dag, engine_config):
 def test_default_configuration(model_dag, tmp_path, monkeypatch):
     dag = model_dag({"numbers.sql": "SELECT 1"})
     monkeypatch.chdir(tmp_path)
-    assert next(iter(execute_models(dag, run_id="test-runZ").values())).status is ExecutionStatus.SUCCESS
+    assert (
+        next(iter(execute_models(dag, run_id="test-runZ").values())).status
+        is ExecutionStatus.SUCCESS
+    )
     assert (tmp_path / ".rollout" / "warehouse.duckdb").is_file()

@@ -3,6 +3,7 @@ import importlib.util
 import logging
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -29,6 +30,8 @@ class SeederResult:
     execution_duration: float | None
     total_duration: float
     output_models: dict[ModelId, ModelResult]
+    started_at: datetime
+    finished_at: datetime
 
 
 def run_seeder(
@@ -104,6 +107,7 @@ def execute_seeder(
     seeder: Seeder,
     connection: duckdb.DuckDBPyConnection,
 ) -> SeederResult:
+    started_at = datetime.now(UTC)
     started = perf_counter()
     logger.info("Executing seeder %s", seeder.path)
     logger.debug("Declared outputs: %s", ", ".join(map(str, seeder.output_ids)))
@@ -141,5 +145,11 @@ def execute_seeder(
         logger.error("%s", error)
     logger.debug("Temporary staging cleaned for %s", seeder.path)
     return SeederResult(
-        status, error, execution_duration, perf_counter() - started, results
+        status=status,
+        error=error,
+        execution_duration=execution_duration,
+        total_duration=perf_counter() - started,
+        output_models=results,
+        started_at=started_at,
+        finished_at=datetime.now(UTC),
     )

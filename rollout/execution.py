@@ -1,6 +1,7 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from functools import partial
 from pathlib import Path
@@ -31,6 +32,8 @@ class ModelResult:
     duration: float | None = None
     quality_results: tuple[QualityCheckResult, ...] = ()
     materialization_duration: float | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
 
 
 def quote_identifier(name: str) -> str:
@@ -147,6 +150,7 @@ def execute_dataset(
     materialize: Callable[[], object],
     quality: tuple[QualityCheck, ...],
 ) -> ModelResult:
+    started_at = datetime.now(UTC)
     started = perf_counter()
     connection.execute("BEGIN TRANSACTION")
     logger.debug("Transaction started for %s", identity)
@@ -191,6 +195,8 @@ def execute_dataset(
             duration=duration,
             quality_results=tuple(quality_results),
             materialization_duration=materialization_duration,
+            started_at=started_at,
+            finished_at=datetime.now(UTC),
         )
 
     else:
@@ -203,6 +209,8 @@ def execute_dataset(
             duration=duration,
             quality_results=tuple(quality_results),
             materialization_duration=materialization_duration,
+            started_at=started_at,
+            finished_at=datetime.now(UTC),
         )
 
 
