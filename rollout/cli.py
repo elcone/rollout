@@ -152,7 +152,7 @@ def run(
     seeder_outputs = {
         identity: result
         for seeder_result in seeder_results.values()
-        for identity, result in seeder_result.outputs.items()
+        for identity, result in seeder_result.output_models.items()
     }
     for label, category in (
         ("Seeders", seeder_results),

@@ -120,4 +120,4 @@ def test_seeder_timing_and_cleanup(tmp_path, monkeypatch, fails):
     assert result.total_duration == 10.0
     assert result.status is (ExecutionStatus.FAILED if fails else ExecutionStatus.SUCCESS)
     assert not Path(marker.read_text()).exists()
-    assert list(result.outputs) == ([] if fails else [ModelId('staging', 'orders')])
+    assert list(result.output_models) == ([] if fails else [ModelId('staging', 'orders')])

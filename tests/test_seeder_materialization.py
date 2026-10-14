@@ -91,7 +91,7 @@ def test_parquet_lives_through_materialization_and_quality(
             }
         },
     )
-    result = execute_seeder(seeder, connection).outputs[ModelId("staging", "orders")]
+    result = execute_seeder(seeder, connection).output_models[ModelId("staging", "orders")]
     assert result.status is ExecutionStatus.SUCCESS
     assert result.duration is not None
     assert result.materialization_duration is not None
@@ -113,7 +113,7 @@ def test_full_replaces_existing_target_and_preserves_identifier_case(
         "return {'Mixed\"Name': connection.sql('SELECT 2 AS id')}\n",
         {'Mixed"Name': {}},
     )
-    result = execute_seeder(seeder, connection).outputs[ModelId("staging", 'Mixed"Name')]
+    result = execute_seeder(seeder, connection).output_models[ModelId("staging", 'Mixed"Name')]
     assert result.status is ExecutionStatus.SUCCESS
     assert connection.sql('SELECT * FROM staging."Mixed""Name"').fetchall() == [(2,)]
     assert_cleaned(marker, connection)
@@ -151,7 +151,7 @@ def test_independent_transactions_and_yaml_processing_order(
     aggregate = execute_seeder(seeder, connection)
     assert aggregate.status is ExecutionStatus.FAILED
     assert aggregate.error is None
-    results = aggregate.outputs
+    results = aggregate.output_models
     assert list(results) == [
         ModelId("staging", name) for name in ("first", "second", "third")
     ]
@@ -186,7 +186,7 @@ def test_warning_commits(write_seeder, connection):
         "return {'orders': connection.sql('SELECT 1 AS id')}\n",
         {"orders": {"quality": [row_count("WARNING", minimum=2)]}},
     )
-    result = execute_seeder(seeder, connection).outputs[ModelId("staging", "orders")]
+    result = execute_seeder(seeder, connection).output_models[ModelId("staging", "orders")]
     assert result.status is ExecutionStatus.SUCCESS
     assert result.quality_results[0].status is CheckStatus.FAIL
     assert connection.sql("SELECT * FROM staging.orders").fetchall() == [(1,)]
@@ -220,7 +220,7 @@ def test_quality_execution_error_rolls_back_and_continues(
     aggregate = execute_seeder(seeder, connection)
     assert aggregate.status is ExecutionStatus.FAILED
     assert aggregate.error is None
-    results = aggregate.outputs
+    results = aggregate.output_models
     assert results[ModelId("staging", "first")].status is ExecutionStatus.FAILED
     assert "Quality check execution error" in results[ModelId("staging", "first")].error
     assert results[ModelId("staging", "second")].status is ExecutionStatus.SUCCESS
@@ -244,7 +244,7 @@ def test_materialization_error_rolls_back_and_continues(write_seeder, connection
     aggregate = execute_seeder(seeder, connection)
     assert aggregate.status is ExecutionStatus.FAILED
     assert aggregate.error is None
-    results = aggregate.outputs
+    results = aggregate.output_models
     assert results[ModelId("staging", "first")].status is ExecutionStatus.FAILED
     assert results[ModelId("staging", "second")].status is ExecutionStatus.SUCCESS
     assert connection.sql("SELECT * FROM staging.first").fetchall() == [(99,)]
@@ -266,7 +266,7 @@ def test_seeder_failure_cleans_temp_and_materializes_nothing(
     seeder, marker = write_seeder(body, {"orders": {}})
     result = execute_seeder(seeder, connection)
     assert result.status is ExecutionStatus.FAILED
-    assert result.outputs == {}
+    assert result.output_models == {}
     assert "Seeder execution failed" in result.error
     assert str(seeder.path) in result.error
     assert connection.sql("SELECT * FROM information_schema.tables").fetchall() == []

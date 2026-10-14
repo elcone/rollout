@@ -159,7 +159,7 @@ def render_execution_markdown(
     output_results = {
         node: result
         for seeder in seeder_results.values()
-        for node, result in seeder.outputs.items()
+        for node, result in seeder.output_models.items()
     }
     dataset_results = {**output_results, **{node: results[node] for node in dag.order}}
     all_results = [*seeder_results.values(), *dataset_results.values()]

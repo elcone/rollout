@@ -28,7 +28,7 @@ class SeederResult:
     error: str | None
     execution_duration: float | None
     total_duration: float
-    outputs: dict[ModelId, ModelResult]
+    output_models: dict[ModelId, ModelResult]
 
 
 def run_seeder(
