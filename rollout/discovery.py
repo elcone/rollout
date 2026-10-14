@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from rollout.config import ModelConfig, SeederConfig
+from rollout.config import ModelConfig, SeederConfig, SeederOutputConfig
 from rollout.models import STAGING_SCHEMA, Model, ModelId, Seeder
 
 logger = logging.getLogger(__name__)
@@ -35,10 +35,13 @@ def discover_models(models_dir: str | Path = "models") -> list[Model]:
     if not root.is_dir():
         raise ValueError(f"Models directory does not exist: {root}")
 
-    if (root / "public").is_dir():
-        raise ValueError(
-            f"Explicit public schema directory is invalid: {root / 'public'}; put SQL files directly under {root}"
-        )
+    reserved_schemas = {
+        "public": f"Explicit public schema directory is invalid: {root / 'public'}; put SQL files directly under {root}",
+        STAGING_SCHEMA: f"Schema '{STAGING_SCHEMA}' is reserved for seeder outputs: {root / STAGING_SCHEMA}",
+    }
+    for schema, message in reserved_schemas.items():
+        if (root / schema).is_dir():
+            raise ValueError(message)
 
     models = []
 
@@ -48,17 +51,11 @@ def discover_models(models_dir: str | Path = "models") -> list[Model]:
 
         parts = path.relative_to(root).parts
         if len(parts) > 2:
-            logger.error(
-                "Ignoring nested model path: %s; expected model.sql or schema/model.sql",
-                path,
+            raise ValueError(
+                f"Invalid nested model path: {path}; expected model.sql or schema/model.sql"
             )
-            continue
 
         schema = parts[0] if len(parts) == 2 else "public"
-        if schema == STAGING_SCHEMA:
-            raise ValueError(
-                f"Schema '{STAGING_SCHEMA}' is reserved for seeder outputs: {path}"
-            )
         logger.debug("Discovered model %s.%s at %s", schema, path.stem, path)
         models.append(
             Model(
@@ -77,8 +74,10 @@ def discover_models(models_dir: str | Path = "models") -> list[Model]:
 def discover_seeders(seeders_dir: str | Path = "seeders") -> list[Seeder]:
     logger.info("Discovering seeders in %s", seeders_dir)
     root = Path(seeders_dir)
+    if not root.exists():
+        return []
     if not root.is_dir():
-        raise ValueError(f"Seeders directory does not exist: {root}")
+        raise ValueError(f"Seeders path is not a directory: {root}")
 
     seeders = []
     output_paths: dict[ModelId, Path] = {}
@@ -86,26 +85,27 @@ def discover_seeders(seeders_dir: str | Path = "seeders") -> list[Seeder]:
         if not path.is_file():
             continue
         yaml_path = path.with_suffix(".yaml")
-        if not yaml_path.exists():
-            raise ValueError(
-                f"Missing seeder configuration for {path}: expected {yaml_path}"
-            )
-        try:
-            data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
-            config = SeederConfig.model_validate(data)
-        except (OSError, UnicodeError, yaml.YAMLError, TypeError, ValueError) as exc:
-            raise ValueError(
-                f"Invalid seeder configuration in {yaml_path}: {exc}"
-            ) from exc
+        config_path = path
+        if yaml_path.exists():
+            config_path = yaml_path
+            try:
+                data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+                config = SeederConfig.model_validate(data)
+            except (OSError, UnicodeError, yaml.YAMLError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Invalid seeder configuration in {yaml_path}: {exc}"
+                ) from exc
+        else:
+            config = SeederConfig(outputs={path.stem: SeederOutputConfig()})
 
         seeder = Seeder(path, config)
         for output_id in seeder.output_ids:
             if output_id in output_paths:
                 raise ValueError(
                     f"Duplicate seeder output {output_id}: "
-                    f"{output_paths[output_id]} and {yaml_path}"
+                    f"{output_paths[output_id]} and {config_path}"
                 )
-            output_paths[output_id] = yaml_path
+            output_paths[output_id] = config_path
         seeders.append(seeder)
 
     logger.info("Found %d seeders", len(seeders))

@@ -23,32 +23,25 @@ def test_layout_order_and_original_sql(write_models):
     assert discover_models(root) == models
 
 
-@pytest.mark.parametrize("files", [{}, {"public/report.sql": "SELECT 1"}])
-def test_explicit_public_directory_is_rejected(write_models, files):
+@pytest.mark.parametrize("schema", ["public", "staging"])
+@pytest.mark.parametrize("populated", [False, True])
+def test_reserved_schema_directories_are_rejected(write_models, schema, populated):
+    files = {f"{schema}/report.sql": "SELECT 1"} if populated else {}
     root = write_models(files)
-    (root / "public").mkdir(exist_ok=True)
-    with pytest.raises(ValueError, match="Explicit public schema"):
+    (root / schema).mkdir(exist_ok=True)
+    with pytest.raises(ValueError) as error:
         discover_models(root)
+    assert str(root / schema) in str(error.value)
 
 
-def test_nested_models_are_logged_and_skipped(write_models, caplog):
-    root = write_models(
-        {
-            "bronze/nested/report.sql": "SELECT FROM",
-            "bronze/nested/deeper/report.sql": "SELECT 1",
-            "report.sql": "SELECT 1",
-            "silver/report.sql": "SELECT * FROM report",
-        }
-    )
-    assert {str(model.id) for model in discover_models(root)} == {
-        "public.report",
-        "silver.report",
-    }
-    errors = [
-        record.getMessage() for record in caplog.records if record.levelname == "ERROR"
-    ]
-    assert len(errors) == 2
-    assert all("Ignoring nested model path" in message for message in errors)
+@pytest.mark.parametrize(
+    "name", ["bronze/nested/report.sql", "bronze/nested/deeper/report.sql"]
+)
+def test_nested_models_are_rejected(write_models, name):
+    root = write_models({name: "SELECT 1", "report.sql": "SELECT 1"})
+    with pytest.raises(ValueError, match="expected model.sql or schema/model.sql") as error:
+        discover_models(root)
+    assert str(root / name) in str(error.value)
 
 
 def test_missing_directory(tmp_path):

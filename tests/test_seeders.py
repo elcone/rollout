@@ -51,20 +51,25 @@ def test_discovery_order_identity_and_no_python_execution(write_seeders):
 
 
 @pytest.mark.parametrize("buddy", [None, "alleva.yml"])
-def test_required_yaml_and_yml_is_not_a_buddy(write_seeders, buddy):
+def test_missing_yaml_infers_output_and_yml_is_not_a_buddy(write_seeders, buddy):
     files = {"alleva.py": ""}
     if buddy:
         files[buddy] = "outputs:\n  orders: {}"
     root = write_seeders(files)
-    with pytest.raises(ValueError) as error:
-        discover_seeders(root)
-    assert str(root / "alleva.py") in str(error.value)
-    assert str(root / "alleva.yaml") in str(error.value)
+    seeder = discover_seeders(root)[0]
+    assert seeder.output_ids == (ModelId("staging", "alleva"),)
+    assert dict(seeder.config.outputs) == {"alleva": SeederOutputConfig()}
 
 
 def test_missing_directory(tmp_path):
-    with pytest.raises(ValueError, match="Seeders directory does not exist"):
-        discover_seeders(tmp_path / "missing")
+    assert discover_seeders(tmp_path / "missing") == []
+
+
+def test_directory_path_is_a_file(tmp_path):
+    path = tmp_path / "seeders"
+    path.write_text("")
+    with pytest.raises(ValueError, match="not a directory"):
+        discover_seeders(path)
 
 
 def test_no_seeders(write_seeders):
@@ -198,6 +203,20 @@ def test_duplicate_outputs_fail_in_deterministic_order(write_seeders):
         discover_seeders(root)
     assert str(error.value) == (
         f"Duplicate seeder output staging.orders: {root / 'a.yaml'} and {root / 'z.yaml'}"
+    )
+
+
+@pytest.mark.parametrize("explicit_yaml", [False, True])
+def test_inferred_outputs_detect_duplicates(write_seeders, explicit_yaml):
+    files = {"a/orders.py": "", "z/orders.py": ""}
+    if explicit_yaml:
+        files["z/orders.yaml"] = "outputs:\n  orders: {}"
+    root = write_seeders(files)
+    second = root / ("z/orders.yaml" if explicit_yaml else "z/orders.py")
+    with pytest.raises(ValueError) as error:
+        discover_seeders(root)
+    assert str(error.value) == (
+        f"Duplicate seeder output staging.orders: {root / 'a/orders.py'} and {second}"
     )
 
 

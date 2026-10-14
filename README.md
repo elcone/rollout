@@ -37,7 +37,7 @@ project/
         └── summary.sql
 ```
 
-A Seeder is a Python file with a required sibling `.yaml` declaring its outputs. Seeders are discovered recursively in sorted path order; output names must be unique across the project. Each Seeder defines `run(connection, staging_dir)` and returns a Python dict mapping exactly its declared names to DuckDB relations:
+A Seeder is a Python file with an optional sibling `.yaml` declaring its outputs. Without YAML, the filename defines one output with default configuration: `customers.py` produces `staging.customers`. A present YAML file must contain valid output configuration; empty or invalid YAML fails discovery. `.yml` files are not loaded. A missing `seeders/` directory produces no Seeders; an existing path must be a directory. Seeders are discovered recursively in sorted path order; output names must be unique across the project. Each Seeder defines `run(connection, staging_dir)` and returns a Python dict mapping exactly its declared names to DuckDB relations:
 
 ```python
 def run(connection, staging_dir):
@@ -132,7 +132,7 @@ models/
     └── active_clients.sql  → silver.active_clients
 ```
 
-Only files at the root or one schema directory below it are included. More deeply nested SQL files are logged at ERROR level and skipped; discovery continues for the remaining models. An explicit `models/public/` directory is rejected; place public models directly under `models/`.
+Only files at the root or one schema directory below it are included. More deeply nested SQL files fail discovery with `ValueError`. Explicit `models/public/` and `models/staging/` directories are rejected even when empty; place public models directly under `models/`.
 
 ## SQL validation
 

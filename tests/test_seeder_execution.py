@@ -217,3 +217,34 @@ def test_multiple_outputs_follow_yaml_order(write_seeder, connection, staging_di
     assert_module_removed(seeder)
     assert list(outputs) == ["first", "second"]
     assert [relation.fetchall() for relation in outputs.values()] == [[(1,)], [(2,)]]
+
+
+@pytest.mark.parametrize(
+    "returned, error",
+    [
+        ("{'customers': relation}", None),
+        ("relation", "must return a Python dict"),
+        ("{'other': relation}", "missing outputs"),
+        ("{'customers': []}", "must be DuckDBPyRelation"),
+    ],
+)
+def test_inferred_output_keeps_run_contract(
+    tmp_path, connection, staging_dir, returned, error
+):
+    path = tmp_path / "customers.py"
+    path.write_text(
+        "def run(connection, staging_dir):\n"
+        "    relation = connection.sql('SELECT 1 AS id')\n"
+        f"    return {returned}\n",
+        encoding="utf-8",
+    )
+    seeder = discover_seeders(tmp_path)[0]
+    if error:
+        with pytest.raises(RuntimeError, match=error):
+            run_seeder(seeder, connection, staging_dir)
+    else:
+        outputs = run_seeder(seeder, connection, staging_dir)
+        assert type(outputs) is dict
+        assert list(outputs) == ["customers"]
+        assert outputs["customers"].fetchall() == [(1,)]
+    assert_module_removed(seeder)
