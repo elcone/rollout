@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rollout lineage · Final POC</title>
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.1.18/dist/index.global.js"></script>
+<!--
+Heroicons v2.2.0 — https://github.com/tailwindlabs/heroicons
+MIT License
+
+Copyright (c) Tailwind Labs, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+<style>
+/* Only Paper/SVG rendering and its canvas background require custom CSS. */
+#canvas { background-image: radial-gradient(circle, #e6ebf2 .6px, transparent .8px); background-size: 18px 18px; }
+#graph.panning, #graph.panning * { cursor: grabbing !important; }
+#graph svg { display: block; width: 100%; height: 100%; max-width: none !important; }
+#graph .lineage-node { cursor: pointer; }
+#graph .lineage-node [joint-selector="body"] { filter: drop-shadow(0 4px 6px rgba(30, 45, 70, .07)); }
+#graph .lineage-node:hover [joint-selector="body"] { filter: drop-shadow(0 3px 5px rgba(30, 45, 70, .12)); }
+#graph .lineage-node:not(.is-selected):not(.is-related):hover [joint-selector="body"] { stroke: #aab6c6; }
+#graph .lineage-node.is-selected [joint-selector="body"] { filter: drop-shadow(0 0 6px rgba(37, 99, 235, .22)) drop-shadow(0 2px 3px rgba(30, 45, 70, .08)); }
+#graph .joint-link { pointer-events: none; }
+#graph .joint-link [joint-selector="wrapper"] { pointer-events: stroke; cursor: grab; }
+#graph .joint-link:not(.is-highlighted):not(.is-dimmed):hover [joint-selector="line"] { stroke: #94a3b8; }
+#graph .schema-container { pointer-events: none; }
+</style>
+</head>
+<body class="fixed inset-0 overflow-hidden bg-slate-50 font-sans text-sm text-slate-700 antialiased">
+<main class="flex h-full w-full overflow-hidden">
+<section id="canvas" aria-label="Lineage graph" class="relative min-h-0 min-w-0 flex-1 bg-slate-50">
+<div id="graph" class="absolute inset-0 cursor-grab touch-none select-none overflow-hidden"></div>
+<div id="message" role="status" class="pointer-events-none absolute left-6 top-6 text-xs text-slate-500">Loading JointJS…</div>
+</section>
+<aside id="panel" aria-label="Execution and node details" class="flex h-full w-96 shrink-0 flex-col border-l border-slate-300 bg-slate-100 xl:w-112">
+<div class="shrink-0 border-b border-slate-300 bg-white px-6 pb-4 pt-5">
+<h1 class="mb-4 text-lg font-semibold tracking-tight text-slate-900">Rollout lineage</h1>
+<div role="tablist" aria-label="Details" class="flex gap-1 rounded-lg bg-slate-200/70 p-1">
+<button id="tab-overview" role="tab" data-tab="overview" aria-selected="true" aria-controls="panel-content" class="flex-1 rounded-md px-3 py-2 text-sm font-medium">Overview</button>
+<button id="tab-quality" role="tab" data-tab="quality" aria-selected="false" aria-controls="panel-content" class="flex-1 rounded-md px-3 py-2 text-sm font-medium">Quality</button>
+</div>
+</div>
+<div id="panel-content" role="tabpanel" aria-labelledby="tab-overview" aria-live="polite" class="min-h-0 flex-1 overflow-y-scroll p-6"></div>
+</aside>
+</main>
+<script>
+const DATA = __DATA__;
+const panel = document.getElementById('panel-content');
+let activeTab = 'overview';
+const modelRecords = new Map(DATA.models.map(record => [`${record.schema}.${record.name}`, record]));
+// Original Heroicons 2.2.0 paths: table-cells, cog-6-tooth, check-circle, x-circle, clock.
+const ICONS = {
+  "model": "M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 0 1-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0 1 12 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m8.625-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-17.25 0h7.5m-7.5 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125M12 10.875v-1.5m0 1.5c0 .621-.504 1.125-1.125 1.125M12 10.875c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125M13.125 12h7.5m-7.5 0c-.621 0-1.125.504-1.125 1.125M20.625 12c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-17.25 0h7.5M12 14.625v-1.5m0 1.5c0 .621-.504 1.125-1.125 1.125M12 14.625c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125m0 1.5v-1.5m0 0c0-.621.504-1.125 1.125-1.125m0 0h7.5",
+  "seeder": "M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z",
+  "pass": "M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm3.857-9.809a.75.75 0 0 0-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 1 0-1.06 1.061l2.5 2.5a.75.75 0 0 0 1.137-.089l4-5.5Z",
+  "fail": "M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM8.28 7.22a.75.75 0 0 0-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 1 0 1.06 1.06L10 11.06l1.72 1.72a.75.75 0 1 0 1.06-1.06L11.06 10l1.72-1.72a.75.75 0 0 0-1.06-1.06L10 8.94 8.28 7.22Z",
+  "clock": "M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+};
+const viewport = document.getElementById('graph');
+const nodes = new Map();
+const edges = [];
+const cells = new Map();
+const links = new Map();
+const incoming = new Map();
+const outgoing = new Map();
+let paper, graph;
+let selectedId = null;
+let scale = 1, translateX = 0, translateY = 0, fittedScale = 1;
+let drag = null, suppressClick = false;
+const modelId = model => `${model.schema}.${model.name}`;
+const seconds = value => value == null ? '—' : `${value.toFixed(3)}s`;
+const shortSeconds = value => value == null ? '—' : `${value.toFixed(2)}s`;
+const display = value => value == null ? '—' : typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+
+function addModel(record) {
+  const id = modelId(record);
+  if (!nodes.has(id)) nodes.set(id, {...record, type: 'model', label: id, inputs: [], outputs: [], quality: []});
+  return id;
+}
+function addSeeder(name, record = {}) {
+  if (!nodes.has(name)) nodes.set(name, {...record, name, type: 'seeder', label: name, inputs: [], outputs: []});
+  return name;
+}
+function prepareLineage() {
+  for (const record of DATA.seeders) addSeeder(record.name, record);
+  for (const record of DATA.models) addModel(record);
+  const seen = new Set();
+  for (const job of DATA.lineage) {
+    const targets = (job.outputs || []).map(addModel);
+    let sources;
+    if (job.job_type === 'SEEDER') sources = [addSeeder(job.job_name)];
+    else if (job.job_type === 'MODEL') sources = (job.inputs || []).map(addModel);
+    else throw new Error(`Unknown lineage job type: ${job.job_type}`);
+    for (const source of sources) for (const target of targets) {
+      const pair = JSON.stringify([source, target]);
+      if (seen.has(pair)) continue;
+      seen.add(pair);
+      const edge = {id: `edge_${edges.length}`, source, target};
+      edges.push(edge);
+      nodes.get(source).outputs.push(target);
+      nodes.get(target).inputs.push(source);
+    }
+  }
+  for (const entry of DATA.quality) {
+    const node = nodes.get(modelId(entry.model));
+    if (node) node.quality.push(...(entry.checks || []));
+  }
+  for (const id of nodes.keys()) { incoming.set(id, []); outgoing.set(id, []); }
+  for (const edge of edges) { incoming.get(edge.target).push(edge); outgoing.get(edge.source).push(edge); }
+}
+function element(tag, text, parent, className = '') {
+  const node = document.createElement(tag);
+  if (text != null) node.textContent = display(text);
+  node.className = className;
+  parent.appendChild(node);
+  return node;
+}
+function section(title, parent = panel, count = null) {
+  const section = element('section', null, parent, 'border-t border-slate-300/70 py-6');
+  const heading = element('h3', title, section, 'mb-4 text-sm font-semibold tracking-tight text-slate-900');
+  if (count != null) element('span', ` (${count})`, heading, 'font-normal text-slate-500');
+  return element('div', null, section);
+}
+function fields(parent, entries) {
+  const list = element('dl', null, parent, 'space-y-4 text-sm');
+  for (const [label, value] of entries) {
+    const row = element('div', null, list, 'grid grid-cols-5 gap-3');
+    element('dt', label, row, 'col-span-2 text-slate-500');
+    element('dd', display(value), row, 'col-span-3 min-w-0 whitespace-pre-wrap break-words text-slate-800');
+  }
+}
+function statusBadge(status, parent) {
+  const colors = {
+    SUCCESS: 'bg-emerald-50 text-emerald-700', PASS: 'bg-emerald-50 text-emerald-700',
+    FAILED: 'bg-red-50 text-red-700', FAIL: 'bg-red-50 text-red-700',
+    SKIPPED: 'bg-amber-50 text-amber-700',
+  };
+  const badge = element('span', null, parent, 'inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold ' + (colors[status] || 'bg-slate-50 text-slate-500'));
+  if (['SUCCESS', 'PASS', 'FAILED', 'FAIL'].includes(status)) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 20 20'); svg.setAttribute('width', '16'); svg.setAttribute('height', '16');
+    svg.setAttribute('fill', 'currentColor'); svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', ICONS[status === 'SUCCESS' || status === 'PASS' ? 'pass' : 'fail']);
+    path.setAttribute('fill-rule', 'evenodd'); path.setAttribute('clip-rule', 'evenodd');
+    svg.appendChild(path); badge.appendChild(svg);
+  }
+  element('span', display(status), badge);
+  return badge;
+}
+function statusSignal(status, parent) {
+  const colors = {SUCCESS: 'text-emerald-700', FAILED: 'text-red-700', SKIPPED: 'text-amber-700'};
+  const signal = element('span', null, parent, 'inline-flex items-center gap-2 text-xs font-semibold ' + (colors[status] || 'text-slate-500'));
+  element('span', null, signal, 'size-2.5 shrink-0 rounded-full bg-current');
+  element('span', display(status), signal);
+}
+function jobIcon(type, parent) {
+  const box = element('div', null, parent, 'flex size-12 shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-600');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '28'); svg.setAttribute('height', '28');
+  svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.5'); svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', ICONS[type]); svg.appendChild(path); box.appendChild(svg);
+}
+function contextHeader(node, parent) {
+  const header = element('div', null, parent, 'pb-6');
+  const top = element('div', null, header, 'flex items-start gap-4');
+  if (node) jobIcon(node.type, top);
+  const identity = element('div', null, top, 'min-w-0 flex-1');
+  element('span', node ? node.type === 'seeder' ? 'seeder' : node.schema : 'Execution', identity, 'mb-2 inline-flex max-w-full break-words rounded-md bg-slate-200/70 px-2.5 py-1 text-xs font-medium text-slate-600');
+  element('h2', node ? node.type === 'seeder' ? node.name.split('/').pop() : node.name : DATA.run_id, identity, 'break-words text-2xl font-semibold leading-8 tracking-tight text-slate-950');
+  const metadata = element('div', null, header, 'mt-5 flex flex-wrap items-center justify-between gap-3');
+  statusSignal(node ? node.status : DATA.status, metadata);
+  durationSignal(node ? node.duration : DATA.duration, metadata);
+}
+function durationSignal(value, parent) {
+  const duration = element('span', null, parent, 'inline-flex items-center gap-1.5 text-xs tabular-nums text-slate-600');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '18'); svg.setAttribute('height', '18');
+  svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '1.5');
+  svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round'); svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', ICONS.clock); svg.appendChild(path); duration.appendChild(svg);
+  element('span', shortSeconds(value), duration);
+}
+function metrics(parent, entries) {
+  const grid = element('dl', null, parent, 'grid grid-cols-2 gap-x-6 gap-y-5');
+  for (const [label, value] of entries) {
+    const box = element('div', null, grid, 'space-y-1');
+    element('dt', label, box, 'text-xs leading-5 text-slate-500');
+    element('dd', value, box, 'mt-1 break-words text-base font-semibold tabular-nums text-slate-800');
+  }
+}
+function empty(text, parent) { element('p', text, parent, 'text-xs leading-6 text-slate-500'); }
+function modelLink(id, parent) {
+  const button = element('button', nodes.get(id).label, parent, 'min-w-0 cursor-pointer break-words text-left text-xs font-medium leading-5 text-slate-700 hover:text-blue-600 focus-visible:outline-2 focus-visible:outline-blue-600');
+  button.onclick = () => selectNode(id);
+  return button;
+}
+function connections(title, ids, outputRuntime = false) {
+  const content = section(title, panel, ids.length);
+  if (!ids.length) { empty('None recorded.', content); return; }
+  const list = element('ul', null, content, 'divide-y divide-slate-300/70');
+  for (const id of ids) {
+    const item = element('li', null, list, 'flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0');
+    modelLink(id, element('div', null, item, 'min-w-0 flex-1'));
+    if (outputRuntime) {
+      const output = modelRecords.get(id);
+      const runtime = element('div', null, item, 'flex shrink-0 flex-col items-end gap-1');
+      statusBadge(output?.status, runtime);
+      element('span', shortSeconds(output?.duration), runtime, 'text-xs tabular-nums text-slate-500');
+    }
+  }
+}
+function executionOverview() {
+  fields(section('Timing'), [['Started', DATA.started_at], ['Finished', DATA.finished_at], ['Duration', seconds(DATA.duration)]]);
+  metrics(section('Objects'), [['Models', DATA.models.length], ['Seeders', DATA.seeders.length]]);
+  const counts = {SUCCESS: 0, FAILED: 0, SKIPPED: 0};
+  for (const record of [...DATA.seeders, ...DATA.models]) if (Object.hasOwn(counts, record.status)) counts[record.status]++;
+  fields(section('Results'), [['Successful', counts.SUCCESS], ['Failed', counts.FAILED], ['Skipped', counts.SKIPPED]]);
+}
+function objectOverview(node) {
+  const runtime = section('Runtime');
+  if (node.type === 'seeder') {
+    fields(runtime, [['Type', 'Seeder'], ['Name', node.name], ['Total duration', shortSeconds(node.duration)], ['Run duration', shortSeconds(node.execution_duration)], ['Outputs', node.outputs.length], ['Started', node.started_at], ['Finished', node.finished_at]]);
+  } else {
+    fields(runtime, [['Type', 'Model'], ['Duration', shortSeconds(node.duration)], ['Materialization', shortSeconds(node.materialization_duration)], ['Started', node.started_at], ['Finished', node.finished_at]]);
+    connections('Upstream', node.inputs);
+  }
+  connections(node.type === 'seeder' ? 'Outputs' : 'Downstream', node.outputs, node.type === 'seeder');
+  element('pre', display(node.error), section('Error'), 'whitespace-pre-wrap break-words rounded-md bg-slate-200/50 p-3 font-mono text-xs leading-5 text-slate-600');
+}
+function qualitySummary(checks) {
+  const counts = new Map();
+  for (const check of checks) {
+    const status = display(check.status);
+    counts.set(status, (counts.get(status) || 0) + 1);
+  }
+  return [...counts].map(([status, count]) => `${count} ${status}`).join(' · ');
+}
+function modelQuality(node) {
+  const content = section('Quality checks', panel, node.quality.length);
+  if (!node.quality.length) { empty('No quality checks recorded for this model.', content); return; }
+  const list = element('div', null, content, 'divide-y divide-slate-300/70');
+  for (const check of node.quality) {
+    const row = element('section', null, list, 'py-4 first:pt-0 last:pb-0');
+    const title = element('div', null, row, 'mb-4 flex items-start justify-between gap-3');
+    element('h4', check.name == null ? '—' : check.name, title, 'min-w-0 break-words font-mono text-sm font-medium leading-6 text-slate-900');
+    statusBadge(check.status, title);
+    fields(row, [['Type', check.type], ['Status', check.status], ['Severity', check.severity], ['Observed', check.observed], ['Expected', check.expected], ['Duration', seconds(check.duration)]]);
+    element('h5', 'Parameters', row, 'mb-2 mt-4 text-xs font-semibold text-slate-600');
+    element('pre', display(check.parameters), row, 'whitespace-pre-wrap break-words rounded-md bg-slate-200/50 p-3 font-mono text-xs leading-5 text-slate-600');
+  }
+}
+function seederQuality(node) {
+  const content = section('Quality by output');
+  empty('Quality is recorded per output Model, not per Seeder.', content);
+  if (!node.outputs.length) { empty('No outputs recorded.', content); return; }
+  const list = element('ul', null, content, 'mt-3 divide-y divide-slate-100');
+  for (const id of node.outputs) {
+    const item = element('li', null, list, 'space-y-1 py-3 first:pt-0 last:pb-0');
+    modelLink(id, item);
+    const checks = nodes.get(id).quality;
+    empty(checks.length ? `${checks.length} checks · ${qualitySummary(checks)}` : 'No quality checks recorded for this output.', item);
+  }
+}
+function runQuality() {
+  const checks = DATA.quality.flatMap(result => result.checks);
+  const content = section('Recorded quality checks');
+  metrics(content, [['Total checks', checks.length], ['PASS', checks.filter(c => c.status === 'PASS').length], ['FAIL', checks.filter(c => c.status === 'FAIL').length], ['WARNING severity', checks.filter(c => c.severity === 'WARNING').length], ['ERROR severity', checks.filter(c => c.severity === 'ERROR').length]]);
+  if (!checks.length) empty('No quality checks recorded for this run.', element('div', null, content, 'mt-3'));
+}
+function renderPanel() {
+  for (const tab of document.querySelectorAll('[role="tab"]')) {
+    const active = tab.dataset.tab === activeTab;
+    tab.setAttribute('aria-selected', String(active));
+    tab.className = 'flex-1 cursor-pointer rounded-md px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-blue-600 ' + (active ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-300' : 'text-slate-600 hover:text-slate-900');
+  }
+  panel.setAttribute('aria-labelledby', `tab-${activeTab}`);
+  panel.replaceChildren();
+  panel.scrollTop = 0;
+  const node = selectedId ? nodes.get(selectedId) : null;
+  contextHeader(node, panel);
+  if (activeTab === 'overview') {
+    if (node) objectOverview(node); else executionOverview();
+  } else if (!node) runQuality();
+  else if (node.type === 'model') modelQuality(node);
+  else seederQuality(node);
+}
+function selectNode(id) {
+  if (!nodes.has(id)) return;
+  if (selectedId === id) { resetSelection(); return; }
+  selectedId = id;
+  highlight(id);
+  renderPanel();
+}
+for (const tab of document.querySelectorAll('[role="tab"]')) {
+  tab.onclick = () => { activeTab = tab.dataset.tab; renderPanel(); };
+}
+
+function walk(start, adjacency, direction) {
+  const related = new Set([start]), paths = new Set(), pending = [start];
+  while (pending.length) {
+    for (const edge of adjacency.get(pending.pop())) {
+      paths.add(edge.id);
+      const neighbor = edge[direction];
+      if (!related.has(neighbor)) { related.add(neighbor); pending.push(neighbor); }
+    }
+  }
+  return {nodes: related, edges: paths};
+}
+function statusStyle(node) {
+  const colors = {SUCCESS: '#15803d', FAILED: '#b91c1c', SKIPPED: '#b45309'};
+  return {signal: colors[node.status] || '#64748b', stroke: node.status === 'FAILED' ? '#e8b4b4' : '#b3bfce'};
+}
+function highlight(id = null) {
+  const up = id && nodes.get(id).type === 'model' ? walk(id, incoming, 'source') : {nodes: new Set(), edges: new Set()};
+  const down = id ? walk(id, outgoing, 'target') : {nodes: new Set(), edges: new Set()};
+  for (const [key, cell] of cells) {
+    const node = nodes.get(key), base = statusStyle(node);
+    const selected = key === id, upstream = up.nodes.has(key), downstream = down.nodes.has(key);
+    cell.attr('body/stroke', selected ? '#2563eb' : upstream ? '#06b6d4' : downstream ? '#d946ef' : base.stroke);
+    cell.attr('body/strokeWidth', selected ? 3 : upstream || downstream ? 2 : 1);
+    cell.attr('root/opacity', !id || selected || upstream || downstream ? 1 : 0.4);
+    const view = paper.findViewByModel(cell);
+    view.el.classList.toggle('is-selected', selected);
+    view.el.classList.toggle('is-related', !selected && (upstream || downstream));
+  }
+  for (const edge of edges) {
+    const link = links.get(edge.id), upstream = up.edges.has(edge.id), downstream = down.edges.has(edge.id);
+    const color = upstream ? '#06b6d4' : downstream ? '#d946ef' : '#b8c3d1';
+    link.attr('line/stroke', color);
+    link.attr('line/strokeWidth', upstream || downstream ? 2 : 1);
+    link.attr('line/targetMarker/fill', color);
+    link.attr('line/targetMarker/stroke', color);
+    link.attr('root/opacity', !id || upstream || downstream ? 1 : 0.1);
+    const view = paper.findViewByModel(link);
+    view.el.classList.toggle('is-highlighted', upstream || downstream);
+    view.el.classList.toggle('is-dimmed', Boolean(id) && !upstream && !downstream);
+  }
+}
+function resetSelection() { selectedId = null; highlight(); renderPanel(); }
+
+function nodeText(node) {
+  const name = node.type === 'seeder' ? node.name.split('/').pop() : node.name;
+  const meta = node.type === 'seeder'
+    ? `Total ${shortSeconds(node.duration)}   Python ${shortSeconds(node.execution_duration)}`
+    : `· ${shortSeconds(node.duration)}`;
+  const summary = node.type === 'seeder' ? `${node.outputs.length} outputs` : node.quality.length ? 'Quality · ' + qualitySummary(node.quality) : '';
+  return {name, status: display(node.status), meta, summary, schema: node.type === 'model' ? node.schema : ''};
+}
+// Compact and complete cards share slate neutrals, blue Heroicons, restrained radii, and status dots.
+function defineCard() {
+  return joint.dia.Element.define('lineage.Card', {
+    attrs: {
+      root: {cursor: 'pointer'},
+      body: {width: 'calc(w)', height: 'calc(h)', rx: 10, ry: 10, fill: '#ffffff', stroke: '#b3bfce', strokeWidth: 1},
+      iconBackground: {x: 16, y: 16, width: 40, height: 40, rx: 8, ry: 8, fill: '#dbeafe', pointerEvents: 'none'},
+      icon: {transform: 'translate(24 24)', fill: 'none', stroke: '#2563eb', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', pointerEvents: 'none'},
+      schemaBackground: {x: 72, y: 16, height: 18, rx: 4, ry: 4, fill: '#f1f5f9', pointerEvents: 'none'},
+      schema: {x: 80, y: 25, textVerticalAnchor: 'middle', fontFamily: 'system-ui', fontSize: 10, fill: '#475569', pointerEvents: 'none'},
+      title: {x: 72, y: 50, textVerticalAnchor: 'middle', fontFamily: 'system-ui', fontSize: 14, fontWeight: 600, fill: '#0f172a', pointerEvents: 'none'},
+      statusDot: {cx: 24, cy: 84, r: 4, pointerEvents: 'none'},
+      status: {x: 36, y: 84, textVerticalAnchor: 'middle', fontFamily: 'system-ui', fontSize: 11, fontWeight: 600, pointerEvents: 'none'},
+      clock: {fill: 'none', stroke: '#64748b', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', pointerEvents: 'none'},
+      python: {x: 20, y: 103, textVerticalAnchor: 'middle', fontFamily: 'system-ui', fontSize: 11, fill: '#64748b', pointerEvents: 'none'},
+      meta: {textAnchor: 'end', y: 84, textVerticalAnchor: 'middle', fontFamily: 'system-ui', fontSize: 11, fill: '#64748b', pointerEvents: 'none'},
+      summary: {x: 36, y: 106, textVerticalAnchor: 'middle', fontFamily: 'system-ui', fontSize: 11, fill: '#64748b', pointerEvents: 'none'},
+    },
+  }, {
+    markup: [{tagName: 'rect', selector: 'body'}, {tagName: 'rect', selector: 'iconBackground'}, {tagName: 'path', selector: 'icon'}, {tagName: 'rect', selector: 'schemaBackground'}, {tagName: 'text', selector: 'schema'}, {tagName: 'text', selector: 'title'}, {tagName: 'circle', selector: 'statusDot'}, {tagName: 'text', selector: 'status'}, {tagName: 'path', selector: 'clock'}, {tagName: 'text', selector: 'meta'}, {tagName: 'text', selector: 'python'}, {tagName: 'text', selector: 'summary'}],
+  });
+}
+function compactCardLayout(durationWidth, width) {
+  return {
+    schemaBackground: {x: 72},
+    schema: {x: 80},
+    title: {x: 72, y: 50},
+    statusDot: {cx: 24, cy: 82},
+    status: {x: 36, y: 82},
+    clock: {transform: `translate(${width - 20 - durationWidth - 22} 74) scale(0.6666667)`},
+    meta: {x: width - 20, y: 82},
+    python: {x: 20, y: 103},
+    summary: {x: 20, y: 123},
+  };
+}
+function createNode(id, node, Card) {
+  const text = nodeText(node), style = statusStyle(node), seeder = node.type === 'seeder';
+  const measure = document.createElement('canvas').getContext('2d');
+  measure.font = '600 14px system-ui';
+  const titleWidth = measure.measureText(text.name).width + 92;
+  measure.font = '600 11px system-ui';
+  const statusWidth = measure.measureText(text.status).width;
+  measure.font = '11px system-ui';
+  const metaWidth = measure.measureText(text.meta).width;
+  const summaryWidth = measure.measureText(text.summary).width;
+  measure.font = '10px system-ui';
+  const schemaWidth = measure.measureText(text.schema).width;
+  const badgeWidth = seeder ? measure.measureText('seeder').width : schemaWidth;
+  const width = Math.ceil(Math.max(220, titleWidth, schemaWidth + 104, seeder ? metaWidth + 40 : statusWidth + metaWidth + 64, summaryWidth + 56));
+  // Existing bounds are intentionally frozen; only the visible metadata alignment changes.
+  measure.font = '11px system-ui';
+  const durationText = shortSeconds(node.duration);
+  const durationWidth = measure.measureText(durationText).width;
+  const layout = compactCardLayout(durationWidth, width);
+  const metadataRows = seeder
+    ? [`Run duration ${shortSeconds(node.execution_duration)}`, text.summary]
+    : text.summary ? [text.summary] : [];
+  const cell = new Card({
+    logicalId: id, size: {width, height: seeder ? 136 : text.summary ? 126 : 104}, z: 2,
+    attrs: {
+      body: {stroke: style.stroke}, icon: {d: ICONS[node.type]},
+      schemaBackground: {...layout.schemaBackground, width: badgeWidth + 16},
+      schema: {...layout.schema, text: seeder ? 'seeder' : text.schema},
+      title: {...layout.title, text: text.name},
+      statusDot: {...layout.statusDot, fill: style.signal},
+      status: {...layout.status, text: text.status, fill: style.signal},
+      clock: {...layout.clock, d: ICONS.clock},
+      meta: {...layout.meta, text: durationText},
+      python: {...layout.python, text: metadataRows[0] || '', display: metadataRows.length ? 'block' : 'none'},
+      summary: {...layout.summary, text: metadataRows[1] || '', display: metadataRows.length > 1 ? 'block' : 'none'},
+    },
+  });
+  cells.set(id, cell);
+  return cell;
+}
+
+// Longest-path ranks with stable queue order. Only real lineage edges affect rank.
+function ranks(ids, pairs) {
+  const depth = new Map(ids.map(id => [id, 0]));
+  const degree = new Map(ids.map(id => [id, 0]));
+  const next = new Map(ids.map(id => [id, []]));
+  for (const [source, target] of pairs) { degree.set(target, degree.get(target) + 1); next.get(source).push(target); }
+  const queue = ids.filter(id => degree.get(id) === 0);
+  for (let i = 0; i < queue.length; i++) {
+    const source = queue[i];
+    for (const target of next.get(source)) {
+      depth.set(target, Math.max(depth.get(target), depth.get(source) + 1));
+      degree.set(target, degree.get(target) - 1);
+      if (degree.get(target) === 0) queue.push(target);
+    }
+  }
+  if (queue.length !== ids.length) throw new Error('Lineage contains a cycle; the simple DAG layout cannot render it.');
+  return depth;
+}
+function layoutGraph() {
+  const schemas = [...new Set([...nodes.values()].filter(n => n.type === 'model').map(n => n.schema))].sort();
+  const schemaPairs = new Map();
+  for (const edge of edges) {
+    const source = nodes.get(edge.source), target = nodes.get(edge.target);
+    if (source.type === 'model' && source.schema !== target.schema) schemaPairs.set(JSON.stringify([source.schema, target.schema]), [source.schema, target.schema]);
+  }
+  // Schemas occupy dependency columns; each column's containers form vertical bands.
+  const schemaRanks = ranks(schemas, [...schemaPairs.values()]);
+  const groups = schemas.map(schema => {
+    const ids = [...nodes].filter(([,node]) => node.type === 'model' && node.schema === schema).map(([id]) => id);
+    const localEdges = edges.filter(e => ids.includes(e.source) && ids.includes(e.target)).map(e => [e.source, e.target]);
+    const localRanks = ranks(ids, localEdges);
+    const columns = Array.from({length: Math.max(...localRanks.values()) + 1}, () => []);
+    for (const id of ids) columns[localRanks.get(id)].push(id);
+    const widths = columns.map(column => Math.max(...column.map(id => cells.get(id).size().width)));
+    const heights = columns.map(column => column.reduce((height, id) => height + cells.get(id).size().height + 26, 0) - 26);
+    return {schema, ids, columns, widths, width: widths.reduce((a,b) => a+b,0) + (columns.length-1)*64 + 64, height: Math.max(...heights) + 84, rank: schemaRanks.get(schema)};
+  });
+  const seeders = [...nodes].filter(([,node]) => node.type === 'seeder').map(([id]) => id);
+  let x = seeders.length ? Math.max(...seeders.map(id => cells.get(id).size().width)) + 100 : 0;
+  let totalHeight = 0;
+  for (let rank = 0; rank <= Math.max(-1, ...schemaRanks.values()); rank++) {
+    const band = groups.filter(group => group.rank === rank);
+    let y = 0;
+    for (const group of band) {
+      const container = new joint.shapes.standard.Rectangle({type: 'lineage.Schema', z: 0, position: {x,y}, size: {width: group.width, height: group.height}, attrs: {
+        root: {pointerEvents: 'none'},
+        body: {rx: 10, ry: 10, fill: '#eef2f6', fillOpacity: 1, stroke: '#cbd5e1', strokeWidth: 1},
+        label: {text: group.schema, x: 32, y: 22, textAnchor: 'start', textVerticalAnchor: 'middle', fontFamily: 'system-ui', fontSize: 12, fontWeight: 600, fill: '#526176'},
+      }});
+      graph.addCell(container);
+      let columnX = x + 32;
+      group.columns.forEach((column, index) => {
+        let rowY = y + 56;
+        for (const id of column) {
+          const cell = cells.get(id);
+          cell.position(columnX + (group.widths[index] - cell.size().width) / 2, rowY);
+          graph.addCell(cell);
+          container.embed(cell);
+          rowY += cell.size().height + 26;
+        }
+        columnX += group.widths[index] + 64;
+      });
+      y += group.height + 36;
+    }
+    totalHeight = Math.max(totalHeight, y - 36);
+    x += Math.max(...band.map(group => group.width)) + 100;
+  }
+  let seederY = Math.max(0, (totalHeight - seeders.reduce((height,id) => height + cells.get(id).size().height + 26, 0)) / 2);
+  for (const id of seeders) { const cell = cells.get(id); cell.position(0,seederY); graph.addCell(cell); seederY += cell.size().height + 26; }
+}
+// Short horizontal ends join a cubic with horizontal tangents: one uninterrupted path.
+function continuousLink(source, target, vertices, options) {
+  const lead = Math.min(20, Math.max(0, (target.x - source.x) / 4));
+  const startX = source.x + lead;
+  const endX = target.x - lead;
+  const handle = (endX - startX) / 2;
+  const path = joint.g.Path.parse(
+    `M ${source.x} ${source.y} L ${startX} ${source.y} ` +
+    `C ${startX + handle} ${source.y} ${endX - handle} ${target.y} ${endX} ${target.y} ` +
+    `L ${target.x} ${target.y}`
+  );
+  return options.raw ? path : path.serialize();
+}
+function renderGraph() {
+  const Card = defineCard();
+  const namespace = {...joint.shapes, lineage: {Card, Schema: joint.shapes.standard.Rectangle}};
+  graph = new joint.dia.Graph({}, {cellNamespace: namespace});
+  paper = new joint.dia.Paper({el: viewport, model: graph, cellViewNamespace: namespace,
+    width: viewport.clientWidth, height: viewport.clientHeight, interactive: false, async: false,
+    background: {color: 'transparent'},
+  });
+  for (const [id,node] of nodes) createNode(id,node,Card);
+  layoutGraph();
+  for (const edge of edges) {
+    const link = new joint.shapes.standard.Link({z: 1, source: {id: cells.get(edge.source).id, anchor: {name: 'right'}}, target: {id: cells.get(edge.target).id, anchor: {name: 'left'}}, attrs: {
+      line: {stroke: '#b8c3d1', strokeWidth: 1, targetMarker: {type: 'path', d: 'M 4 -2 0 0 4 2 z', fill: '#b8c3d1', stroke: '#b8c3d1'}},
+    }});
+    link.router('normal');
+    link.connector(continuousLink);
+    graph.addCell(link);
+    links.set(edge.id, link);
+  }
+  for (const [id,cell] of cells) {
+    const view = paper.findViewByModel(cell);
+    view.el.classList.add('lineage-node');
+    view.el.setAttribute('data-logical-id', id);
+    view.el.setAttribute('tabindex', '0');
+    view.el.setAttribute('role', 'button');
+    view.el.setAttribute('aria-label', nodes.get(id).label);
+    view.el.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectNode(id); }
+    });
+  }
+  for (const cell of graph.getElements()) if (cell.get('type') === 'lineage.Schema') paper.findViewByModel(cell).el.classList.add('schema-container');
+  fitGraph();
+  paper.on('blank:pointerdblclick', () => {
+    resetSelection();
+    fitGraph();
+  });
+}
+function applyTransform() {
+  if (!paper) return;
+  paper.scale(scale,scale);
+  paper.translate(translateX,translateY);
+}
+function zoomTo(nextScale, x = viewport.clientWidth / 2, y = viewport.clientHeight / 2) {
+  if (!paper) return;
+  nextScale = Math.max(Math.min(0.3,fittedScale), Math.min(2.5,nextScale));
+  const ratio = nextScale / scale;
+  translateX = x - (x-translateX)*ratio;
+  translateY = y - (y-translateY)*ratio;
+  scale = nextScale;
+  applyTransform();
+}
+function fitGraph() {
+  if (!paper || !viewport.clientWidth || !viewport.clientHeight) return;
+  const bounds = paper.getContentArea();
+  const padding = 28;
+  fittedScale = Math.min(2.5, Math.max(1,viewport.clientWidth-padding*2)/Math.max(1,bounds.width), Math.max(1,viewport.clientHeight-padding*2)/Math.max(1,bounds.height));
+  scale = fittedScale;
+  translateX = (viewport.clientWidth-bounds.width*scale)/2-bounds.x*scale;
+  translateY = (viewport.clientHeight-bounds.height*scale)/2-bounds.y*scale;
+  applyTransform();
+}
+viewport.addEventListener('wheel', event => {
+  if (!paper) return;
+  event.preventDefault();
+  if (!event.deltaY) return;
+  const bounds = viewport.getBoundingClientRect();
+  zoomTo(scale+(event.deltaY<0 ? 0.15 : -0.15),event.clientX-bounds.left,event.clientY-bounds.top);
+}, {passive:false});
+viewport.addEventListener('pointerdown', event => {
+  if (!paper || event.button!==0 || !event.isPrimary || drag) return;
+  suppressClick = false;
+  const pan = !event.target.closest('.lineage-node');
+  drag = {id:event.pointerId,x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,pan};
+  if (pan) { event.preventDefault(); viewport.setPointerCapture(event.pointerId); viewport.classList.add('panning'); }
+}, true);
+viewport.addEventListener('pointermove', event => {
+  if (!drag || drag.id!==event.pointerId) return;
+  if (Math.hypot(event.clientX-drag.startX,event.clientY-drag.startY)>5) suppressClick = true;
+  if (drag.pan && suppressClick) { translateX+=event.clientX-drag.x; translateY+=event.clientY-drag.y; applyTransform(); }
+  drag.x=event.clientX; drag.y=event.clientY;
+});
+function endDrag(event) {
+  if (!drag || drag.id!==event.pointerId) return;
+  if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+  drag=null;
+  viewport.classList.remove('panning');
+}
+window.addEventListener('pointerup',endDrag);
+window.addEventListener('pointercancel',endDrag);
+viewport.addEventListener('lostpointercapture',endDrag);
+viewport.addEventListener('click',event => {
+  if (suppressClick && event.detail>0) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+  const target=event.target.closest('.lineage-node');
+  if (target) selectNode(target.getAttribute('data-logical-id'));
+  else resetSelection();
+}, true);
+viewport.addEventListener('dragstart',event => event.preventDefault());
+new ResizeObserver(() => { if (paper) { paper.setDimensions(viewport.clientWidth,viewport.clientHeight); applyTransform(); } }).observe(viewport);
+renderPanel();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@joint/core@4.0.4/dist/joint.min.js"></script>
+<script>
+try {
+  if (!window.joint) throw new Error('JointJS requires internet access to its CDN');
+  prepareLineage();
+  renderGraph();
+  document.getElementById('message').textContent = '';
+} catch (error) {
+  document.getElementById('message').textContent = `Could not render lineage: ${error.message}`;
+}
+</script>
+</body>
+</html>
