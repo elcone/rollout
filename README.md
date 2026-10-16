@@ -234,3 +234,17 @@ quality:
 Custom SQL runs exactly as authored, without Jinja rendering or reformatting. It is validated during quality execution as one read-only query using the same parser as model SQL; data modification, DDL, SELECT INTO, and multiple statements are rejected. The query may access warehouse tables and must return exactly one row and one column containing a numeric value; strings, dates, booleans, and NULL are unsupported.
 
 Expectations support `gt`, `gte`, `eq`, `neq`, `lt`, and `lte`. All expectations must pass (AND semantics). Reports display the check name and SQL-style comparisons, such as `>= 0.95 AND <= 1`. Invalid SQL, execution errors, and invalid scalar results roll back regardless of severity.
+
+## Project lineage viewer
+
+From a project directory containing `models/`, run:
+
+```bash
+uv run uvicorn tools.viewer.app:app --reload
+```
+
+Open http://127.0.0.1:8000. The server resolves the project relative to its working directory; when running outside this repository, make the repository importable (for example, with Uvicorn's `--app-dir /path/to/rollout`). The browser loads Tailwind and JointJS OSS from CDNs, so internet access is required for the interface.
+
+The Viewer discovers and parses project files on each `GET /api/project`. It shows SQL Models, Sources without a known producer, declared Seeder outputs, schemas, and dependency edges without executing SQL or Python Seeders, connecting to DuckDB, or reading execution history. The API returns `models` (with `origin` equal to `internal`, `seeder`, or `source`), `seeders` (relative path identities and declared outputs), and `lineage` (typed source/target references). Model references retain catalog, schema, and name.
+
+Wheel to zoom, drag blank canvas to pan, click a node to toggle selection, click blank canvas to clear, and double-click blank canvas to Fit. The panel lists immediate upstream dependencies and downstream dependents; graph highlighting follows transitive upstream (cyan) and downstream (magenta) paths. Seeder selection lists declared outputs. Empty projects show no demo nodes; invalid project files produce a visible API error.

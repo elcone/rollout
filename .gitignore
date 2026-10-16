@@ -4,6 +4,9 @@ __pycache__/
 *.egg-info/
 dist/
 projects/
+models/
+seeders/
+poc/
 backups/
 outputs/
 milestones/

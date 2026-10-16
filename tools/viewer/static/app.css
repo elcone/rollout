@@ -1,0 +1,13 @@
+/* Only Paper/SVG rendering and its canvas background require custom CSS. */
+#canvas { background-image: radial-gradient(circle, #d8dee8 .8px, transparent .9px); background-size: 18px 18px; }
+#graph.panning, #graph.panning * { cursor: grabbing !important; }
+#graph svg { display: block; width: 100%; height: 100%; max-width: none !important; }
+#graph .lineage-node { cursor: pointer; }
+#graph .lineage-node [joint-selector="body"] { filter: drop-shadow(0 4px 6px rgba(30, 45, 70, .07)); }
+#graph .lineage-node:hover [joint-selector="body"] { filter: drop-shadow(0 3px 5px rgba(30, 45, 70, .12)); }
+#graph .lineage-node:not(.is-selected):not(.is-related):hover [joint-selector="body"] { stroke: #aab6c6; }
+#graph .lineage-node.is-selected [joint-selector="body"] { filter: drop-shadow(0 0 6px rgba(37, 99, 235, .22)) drop-shadow(0 2px 3px rgba(30, 45, 70, .08)); }
+#graph .joint-link { pointer-events: none; }
+#graph .joint-link [joint-selector="wrapper"] { pointer-events: stroke; cursor: grab; }
+#graph .joint-link:not(.is-highlighted):not(.is-dimmed):hover [joint-selector="line"] { stroke: #94a3b8; }
+#graph .schema-container { pointer-events: none; }
