@@ -82,6 +82,8 @@ const MONOSPACE = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monosp
 const iconKey = node => node.origin === 'source' ? 'source' : node.type;
 // Tuple identities preserve catalogs and punctuation without ambiguous dotted keys.
 const modelId = model => JSON.stringify(['MODEL', model.catalog || '', model.schema, model.name]);
+const schemaId = node => JSON.stringify([node.catalog || '', node.schema]);
+const schemaLabel = node => [node.catalog, node.schema].filter(Boolean).join('.');
 const refId = ref => ref.type === 'SEEDER' ? JSON.stringify(['SEEDER', ref.id]) : modelId(ref);
 function prepareLineage() {
   for (const record of DATA.models) {
@@ -132,7 +134,7 @@ function renderPanel() {
     const counts = [
       ['Models', DATA.models.filter(n => n.origin === 'internal').length],
       ['Seeders', DATA.seeders.length],
-      ['Schemas', new Set(DATA.models.map(n => n.schema)).size],
+      ['Schemas', new Set(DATA.models.map(schemaId)).size],
       ['Dependencies', edges.length],
     ];
     const list = element('dl', null, panel, 'space-y-4');
@@ -180,18 +182,19 @@ function createNode(id, node, Card) {
   cells.set(id, cell);
 }
 function layoutGraph() {
-  const schemas = [...new Set([...nodes.values()].filter(n => n.type === 'model').map(n => n.schema))].sort();
+  const schemas = [...new Set([...nodes.values()].filter(n => n.type === 'model').map(schemaId))].sort();
   const schemaPairs = new Map();
   for (const edge of edges) {
     const source = nodes.get(edge.source), target = nodes.get(edge.target);
-    if (source.type === 'model' && target.type === 'model' && source.schema !== target.schema) {
-      schemaPairs.set(JSON.stringify([source.schema, target.schema]), [source.schema, target.schema]);
+    if (source.type === 'model' && target.type === 'model' && schemaId(source) !== schemaId(target)) {
+      const pair = [schemaId(source), schemaId(target)];
+      schemaPairs.set(JSON.stringify(pair), pair);
     }
   }
   // Schemas occupy dependency columns; each column's containers form vertical bands.
   const schemaRanks = ranks(schemas, [...schemaPairs.values()], true);
   const groups = schemas.map(schema => {
-    const ids = [...nodes].filter(([,node]) => node.type === 'model' && node.schema === schema).map(([id]) => id);
+    const ids = [...nodes].filter(([,node]) => node.type === 'model' && schemaId(node) === schema).map(([id]) => id);
     const localEdges = edges.filter(e => ids.includes(e.source) && ids.includes(e.target)).map(e => [e.source, e.target]);
     const localRanks = ranks(ids, localEdges);
     const columns = Array.from({length: Math.max(...localRanks.values()) + 1}, () => []);
@@ -199,7 +202,7 @@ function layoutGraph() {
     const widths = columns.map(column => Math.max(...column.map(id => cells.get(id).size().width)));
     const heights = columns.map(column => column.reduce((height, id) => height + cells.get(id).size().height + 26, 0) - 26);
     return {
-      schema, ids, columns, widths,
+      schema, label: schemaLabel(nodes.get(ids[0])), ids, columns, widths,
       width: widths.reduce((a, b) => a + b, 0) + (columns.length - 1) * 64 + 64,
       height: Math.max(...heights) + 84,
       rank: schemaRanks.get(schema),
@@ -216,7 +219,7 @@ function layoutGraph() {
         position: {x,y}, size: {width: group.width, height: group.height}, attrs: {
         root: {pointerEvents: 'none'},
         body: {rx: 10, ry: 10, fill: '#eef2f6', fillOpacity: 1, stroke: '#e2e8f0', strokeWidth: 0.5},
-        label: {text: group.schema, x: 32, y: 22, textAnchor: 'start', textVerticalAnchor: 'middle', fontFamily: MONOSPACE, fontSize: 11, fontWeight: 400, fill: '#526176'},
+        label: {text: group.label, x: 32, y: 22, textAnchor: 'start', textVerticalAnchor: 'middle', fontFamily: MONOSPACE, fontSize: 11, fontWeight: 400, fill: '#526176'},
       }});
       graph.addCell(container);
       let columnX = x + 32;

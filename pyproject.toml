@@ -32,3 +32,6 @@ branch = true
 
 [tool.coverage.report]
 fail_under = 85
+
+[tool.hatch.build.targets.wheel]
+packages = ["rollout", "tools"]

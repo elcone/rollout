@@ -3,10 +3,10 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 dist/
-projects/
-models/
-seeders/
-poc/
+/projects/
+/models/
+/seeders/
+/poc/
 backups/
 outputs/
 milestones/

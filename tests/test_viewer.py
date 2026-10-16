@@ -219,3 +219,27 @@ def test_no_seeders_directory_leaves_unknown_dependencies_as_sources(project):
         ("orders", "source"),
     }
     assert len(data["lineage"]) == 1
+
+
+def test_referenced_datasets_keep_distinct_catalog_namespaces(project):
+    write(project, 'models/customers.sql', 'SELECT * FROM warehouse_a.raw.customers')
+    write(project, 'models/orders.sql', 'SELECT * FROM warehouse_b.raw.orders')
+    # The same dataset name in another catalog must also retain its identity.
+    write(project, 'models/other_customers.sql', 'SELECT * FROM warehouse_b.raw.customers')
+    response = TestClient(app).get('/api/project')
+    assert response.status_code == 200
+    data = response.json()
+    referenced = {
+        (m['catalog'], m['schema'], m['name'])
+        for m in data['models'] if m['origin'] == 'source'
+    }
+    assert referenced == {
+        ('warehouse_a', 'raw', 'customers'),
+        ('warehouse_b', 'raw', 'orders'),
+        ('warehouse_b', 'raw', 'customers'),
+    }
+    assert {
+        (edge['source']['catalog'], edge['source']['schema'], edge['source']['name'])
+        for edge in data['lineage']
+    } == referenced
+    assert len(data['models']) == 6

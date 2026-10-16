@@ -1,1 +1,0 @@
-"""Static project lineage viewer."""
