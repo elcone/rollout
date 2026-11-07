@@ -8,10 +8,34 @@ from rollout.models import ModelId
 from rollout.parser import parse_models
 from tools.cll.lineage import resolve_model_lineage
 from tools.viewer.project import load_project, model_column_lineage
+from tools.viewer.runs import SUMMARY_FIELDS, read_runs
 
 ROOT = Path(__file__).parent
 templates = Jinja2Templates(directory=ROOT / "templates")
 app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
+
+
+def project_runs():
+    try:
+        return read_runs(Path.cwd())
+    except (ValueError, OSError, UnicodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/runs")
+def runs():
+    return [
+        {field: run[field] for field in SUMMARY_FIELDS}
+        for run in project_runs()
+    ]
+
+
+@app.get("/api/runs/{run_id}")
+def run_detail(run_id: str):
+    for run in project_runs():
+        if run["run_id"] == run_id:
+            return run
+    raise HTTPException(status_code=404, detail=f"Run '{run_id}' does not exist")
 
 
 @app.get("/")

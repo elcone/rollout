@@ -28,7 +28,9 @@ def test_html_and_exact_routes(project):
     assert "fetch('/api/project')" in response.text
     assert "joint.min.js" in response.text
     assert "{{" not in response.text
-    assert {route.path for route in app.routes} == {"/", "/api/project", "/api/cll"}
+    assert {route.path for route in app.routes} == {
+        "/", "/api/project", "/api/cll", "/api/runs", "/api/runs/{run_id}"
+    }
 
 
 def test_empty_project(project):
