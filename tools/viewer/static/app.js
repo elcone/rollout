@@ -95,6 +95,141 @@ const modelId = model => JSON.stringify(['MODEL', model.catalog || '', model.sch
 const schemaId = node => JSON.stringify([node.catalog || '', node.schema]);
 const schemaLabel = node => [node.catalog, node.schema].filter(Boolean).join('.');
 const refId = ref => ref.type === 'SEEDER' ? JSON.stringify(['SEEDER', ref.id]) : modelId(ref);
+let activeRun = null, runLoading = false, runError = '', runRequest = 0;
+const runResults = new Map(), runQuality = new Map();
+const runSelect = document.getElementById('run-selector');
+const RUN_COLORS = {
+  SUCCESS: {fill: '#f0fdf4', text: '#166534'},
+  FAILED: {fill: '#fef2f2', text: '#b91c1c'},
+  SKIPPED: {fill: '#fffbeb', text: '#92400e'},
+  'NO RESULT': {fill: '#f8fafc', text: '#64748b'},
+};
+const durationText = value => value == null ? 'Not recorded' : `${value.toFixed(3)} s`;
+const timestampText = value => value == null ? 'Not recorded' : value;
+const runDate = value => new Date(value).toLocaleString(undefined, {timeZoneName: 'short'});
+function indexRun(run) {
+  activeRun = run; runResults.clear(); runQuality.clear();
+  if (!run) return;
+  for (const result of run.models) runResults.set(modelId(result), {...result, label: [result.schema, result.name].join('.')});
+  for (const result of run.seeders) runResults.set(refId({type: 'SEEDER', id: result.name}), {...result, label: result.name});
+  for (const group of run.quality) runQuality.set(modelId(group.model), group.checks);
+}
+function renderRunSummary() {
+  const summary = document.getElementById('run-summary');
+  summary.replaceChildren();
+  const message = document.getElementById('run-message');
+  message.textContent = runError || (runLoading ? 'Loading execution…' : '');
+  message.setAttribute('role', runError ? 'alert' : 'status');
+  document.getElementById('graph-context').textContent = viewMode === 'cll'
+    ? 'Current column lineage · execution overlay is on the project DAG'
+    : activeRun ? 'Current project DAG · historical execution overlay' : 'Current project DAG · no execution overlay';
+  if (!activeRun) return;
+  element('p', `${activeRun.status} · ${durationText(activeRun.duration)}`, summary, 'font-semibold text-slate-900');
+  element('p', runDate(activeRun.started_at), summary);
+  element('p', activeRun.run_id, summary, 'break-all font-mono text-slate-500');
+  element('p', 'Results belong to this execution. Nodes, dependencies and column lineage reflect the current project.', summary);
+  element('p', 'SUCCESS · FAILED · SKIPPED · NO RESULT', summary, 'font-mono text-[10px]');
+  const unmatched = [...runResults.keys()].filter(id => !nodes.has(id)).length;
+  if (unmatched) {
+    const button = element('button', `Historical results without a current node (${unmatched})`, summary, 'text-left font-medium text-blue-700 hover:underline');
+    button.onclick = () => { if (viewMode === 'cll') returnToProject(); resetSelection(); };
+  }
+}
+function applyRunOverlay() {
+  if (viewMode !== 'project') return;
+  for (const [id, cell] of cells) {
+    const status = activeRun ? runResults.get(id)?.status || 'NO RESULT' : '';
+    const colors = RUN_COLORS[status] || RUN_COLORS['NO RESULT'];
+    cell.attr({body: {fill: status ? colors.fill : '#fff'}, title: {y: status ? 29 : 40},
+      executionStatus: {text: status, fill: colors.text}});
+    const view = paper.findViewByModel(cell);
+    view.el.setAttribute('data-execution-status', status);
+    view.el.setAttribute('aria-label', `${nodes.get(id).label}${status ? ` · ${status}` : ''}`);
+  }
+}
+function renderResult(parent, result, checks = []) {
+  element('p', result.status, parent, 'mb-3 font-mono text-xs font-semibold');
+  const list = element('dl', null, parent, 'space-y-2 text-xs');
+  const fields = [
+    ['Started', timestampText(result.started_at)], ['Finished', timestampText(result.finished_at)],
+    ['Duration', durationText(result.duration)],
+  ];
+  if ('materialization_duration' in result) fields.push(['Materialization', durationText(result.materialization_duration)]);
+  if ('execution_duration' in result) fields.push(['Seeder execution', durationText(result.execution_duration)]);
+  for (const [label, value] of fields) {
+    element('dt', label, list, 'text-slate-500');
+    element('dd', value, list, 'break-words font-mono');
+  }
+  if (result.error) element('pre', result.error, parent, 'mt-4 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-red-200 bg-red-50 p-3 text-xs text-red-800');
+  if (checks.length) {
+    element('h4', 'Quality checks', parent, 'mb-3 mt-5 text-xs font-semibold');
+    for (const check of checks) {
+      const block = element('div', null, parent, 'mb-3 rounded border border-slate-300 bg-white p-3 text-xs');
+      element('p', `${check.name} · ${check.status} · ${check.severity}`, block, 'break-words font-semibold');
+      element('p', `Observed: ${JSON.stringify(check.observed)} · Expected: ${check.expected}`, block, 'mt-2 break-words');
+      element('p', `Duration: ${durationText(check.duration)}`, block, 'mt-2 text-slate-500');
+    }
+  }
+}
+function renderNodeExecution(id) {
+  if (!activeRun) return;
+  const block = section('Historical execution result');
+  const result = runResults.get(id);
+  if (result) renderResult(block, result, runQuality.get(id));
+  else element('p', 'NO RESULT · No result recorded for this node in this execution.', block, 'text-xs text-slate-500');
+}
+function renderUnmatchedResults() {
+  if (!activeRun) return;
+  const unmatched = [...runResults].filter(([id]) => !nodes.has(id));
+  const block = section(`Historical results without a current node (${unmatched.length})`);
+  element('p', 'Matched by dataset identity or Seeder path against the current project DAG.', block, 'mb-4 text-xs text-slate-500');
+  for (const [id, result] of unmatched) {
+    const details = element('details', null, block, 'mb-3 rounded border border-slate-300 bg-white p-3');
+    element('summary', `${result.label} · ${result.status}`, details, 'cursor-pointer break-words font-mono text-xs');
+    const content = element('div', null, details, 'mt-4');
+    renderResult(content, result, runQuality.get(id));
+  }
+}
+async function selectRun(runId) {
+  const request = ++runRequest;
+  indexRun(null); runError = ''; runLoading = Boolean(runId);
+  applyRunOverlay(); renderRunSummary();
+  if (viewMode === 'project') renderPanel();
+  if (!runId) return;
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || 'Could not load execution');
+    if (request !== runRequest) return;
+    indexRun(body);
+  } catch (error) {
+    if (request !== runRequest) return;
+    runError = `Could not load execution: ${error.message}`;
+  } finally {
+    if (request === runRequest) {
+      runLoading = false; applyRunOverlay(); renderRunSummary();
+      if (viewMode === 'project') renderPanel();
+    }
+  }
+}
+async function loadRuns() {
+  try {
+    const response = await fetch('/api/runs');
+    const runs = await response.json();
+    if (!response.ok) throw new Error(runs.detail || 'Could not load execution history');
+    for (const run of runs) {
+      const option = element('option', `${runDate(run.started_at)} · ${run.status} · ${durationText(run.duration)}`, runSelect);
+      option.value = run.run_id;
+    }
+    runSelect.disabled = runs.length === 0;
+    renderRunSummary();
+    if (!runs.length) document.getElementById('run-message').textContent = 'No recorded executions.';
+  } catch (error) {
+    runError = `Could not load execution history: ${error.message}`;
+    renderRunSummary();
+  }
+}
+runSelect.addEventListener('change', () => selectRun(runSelect.value));
 function prepareLineage() {
   for (const record of DATA.models) {
     nodes.set(modelId(record), {...record, type: 'model', label: [record.catalog, record.schema, record.name].filter(Boolean).join('.')});
@@ -152,6 +287,7 @@ function renderPanel() {
       const row = element('div', null, list, 'flex justify-between');
       element('dt', label, row); element('dd', value, row, 'font-semibold text-slate-900');
     }
+    renderUnmatchedResults();
     return;
   }
   panelIcon(iconKey(node));
@@ -162,6 +298,7 @@ function renderPanel() {
   }
   const title = element('h2', node.name, panel, 'mb-6 mt-1 min-w-0 truncate font-mono text-lg font-semibold text-slate-900');
   title.title = node.name;
+  renderNodeExecution(selectedId);
   if (node.type === 'seeder') {
     connections(`Outputs (${node.outputs.length})`, node.outputs.map(modelId));
   } else {
@@ -187,6 +324,7 @@ function defineCard() {
   return joint.dia.Element.define('lineage.Card', {}, {markup: [
     {tagName: 'rect', selector: 'body'}, {tagName: 'rect', selector: 'iconBackground'},
     {tagName: 'path', selector: 'icon'}, {tagName: 'text', selector: 'title'},
+    {tagName: 'text', selector: 'executionStatus'},
   ]});
 }
 function truncateText(text, width, measure) {
@@ -209,6 +347,7 @@ function createNode(id, node, Card) {
     iconBackground: {x: 16, y: 16, width: 40, height: 40, rx: 8, fill: '#dbeafe'},
     icon: {d: ICONS[iconKey(node)], transform: 'translate(24 24)', fill: 'none', stroke: '#2563eb', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round'},
     title: {text: truncateText(node.name, width - 88, measure), x: 72, y: 40, fontSize: 14, fontWeight: 600, fontFamily: MONOSPACE, fill: '#0f172a'},
+    executionStatus: {text: '', x: 72, y: 52, fontSize: 10, fontWeight: 600, fontFamily: MONOSPACE},
   }});
   cells.set(id, cell);
 }
@@ -330,6 +469,7 @@ function renderProjectGraph() {
     });
   }
   for (const cell of graph.getElements()) if (cell.get('type') === 'lineage.Schema') paper.findViewByModel(cell).el.classList.add('schema-container');
+  applyRunOverlay(); renderRunSummary();
   fitGraph();
   paper.on('blank:pointerdblclick', () => {
     resetSelection();
@@ -658,6 +798,7 @@ function renderColumnGraph(data, profile = null) {
   graph.clear(); paper.off('blank:pointerdblclick');
   columnRows.clear(); columnLinks.length = 0; columnIncoming.clear(); columnOutgoing.clear();
   columnData = data; selectedColumnId = null; viewMode = 'cll';
+  renderRunSummary();
   graph.addCells([...datasets.values()].map(dataset => dataset.cell));
   const texts = new Map(data.columns.map(ref => [columnId(ref), ref.text]));
   for (const dataset of datasets.values()) {
@@ -702,6 +843,7 @@ async function start() {
     DATA = body;
     prepareLineage(); renderProjectGraph(); renderPanel();
     message.textContent = nodes.size ? '' : 'This project has no Models or Seeders.';
+    loadRuns();
   } catch (error) {
     message.textContent = `Could not render lineage: ${error.message}`;
     message.setAttribute('role', 'alert');
