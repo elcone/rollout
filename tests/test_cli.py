@@ -4,6 +4,18 @@ from typer.testing import CliRunner
 from rollout.cli import app
 
 
+def test_viewer_serves_packaged_app_from_current_directory(tmp_path, monkeypatch):
+    from pathlib import Path
+    from unittest.mock import patch
+
+    monkeypatch.chdir(tmp_path)
+    with patch("uvicorn.run") as serve:
+        result = CliRunner().invoke(app, ["viewer"])
+    assert result.exit_code == 0, result.output
+    serve.assert_called_once_with("tools.viewer.app:app", host="127.0.0.1", port=8000)
+    assert Path.cwd() == tmp_path
+
+
 def test_dag_stdout_and_output_file(write_models, tmp_path):
     root = write_models({"report.sql": "SELECT * FROM raw.orders"})
     runner = CliRunner()

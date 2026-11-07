@@ -4,6 +4,49 @@ from rollout.dag import build_dag
 from rollout.discovery import discover_models, discover_seeders
 from rollout.models import ModelId
 from rollout.parser import parse_models
+from tools.cll.lineage import ColumnLineage, ColumnRef, ModelColumnLineage, render_text
+
+
+def column_ref(ref: ColumnRef) -> dict:
+    return {
+        "catalog": ref.model.catalog,
+        "schema": ref.model.schema,
+        "model": ref.model.name,
+        "column": ref.column,
+    }
+
+
+def dataset_ref(identity: ModelId) -> dict:
+    return {
+        "catalog": identity.catalog,
+        "schema": identity.schema,
+        "model": identity.name,
+    }
+
+
+def model_column_lineage(lineage: ModelColumnLineage) -> dict:
+    columns = []
+    for dataset in lineage.datasets:
+        for column in dataset.columns:
+            ref = ColumnRef(dataset.model, column)
+            columns.append(
+                {
+                    **column_ref(ref),
+                    "text": render_text(ColumnLineage(ref, lineage.edges)),
+                }
+            )
+    return {
+        "root": dataset_ref(lineage.root),
+        "datasets": [
+            {**dataset_ref(dataset.model), "columns": list(dataset.columns)}
+            for dataset in lineage.datasets
+        ],
+        "edges": [
+            {"source": column_ref(edge.source), "target": column_ref(edge.target)}
+            for edge in lineage.edges
+        ],
+        "columns": columns,
+    }
 
 
 def model_ref(identity: ModelId) -> dict:

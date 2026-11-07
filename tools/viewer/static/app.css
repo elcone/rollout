@@ -11,3 +11,5 @@
 #graph .joint-link [joint-selector="wrapper"] { pointer-events: stroke; cursor: grab; }
 #graph .joint-link:not(.is-highlighted):not(.is-dimmed):hover [joint-selector="line"] { stroke: #94a3b8; }
 #graph .schema-container { pointer-events: none; }
+#graph [data-column-id]:focus { outline: none; }
+#graph [data-column-id]:focus-visible .column-highlight { stroke: #2563eb; }

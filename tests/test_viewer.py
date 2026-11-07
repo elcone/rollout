@@ -28,7 +28,7 @@ def test_html_and_exact_routes(project):
     assert "fetch('/api/project')" in response.text
     assert "joint.min.js" in response.text
     assert "{{" not in response.text
-    assert {route.path for route in app.routes} == {"/", "/api/project"}
+    assert {route.path for route in app.routes} == {"/", "/api/project", "/api/cll"}
 
 
 def test_empty_project(project):
@@ -243,3 +243,143 @@ def test_referenced_datasets_keep_distinct_catalog_namespaces(project):
         for edge in data['lineage']
     } == referenced
     assert len(data['models']) == 6
+
+
+def cll_request(**params):
+    return TestClient(app).get("/api/cll", params={
+        "catalog": "", "schema": "public", "model": "result", **params,
+    })
+
+
+def col(schema, model, column="patient_name", catalog=""):
+    return dict(catalog=catalog, schema=schema, model=model, column=column)
+
+
+def test_cll_complete_model_and_dynamic_filesystem(project):
+    write(project, "models/result.sql", "SELECT patient_id, patient_name, 1 AS version FROM staging.services")
+    response = cll_request()
+    assert response.status_code == 200
+    data = response.json()
+    assert data["root"] == {"catalog": "", "schema": "public", "model": "result"}
+    assert data["datasets"] == [
+        {**data["root"], "columns": ["patient_id", "patient_name", "version"]},
+        {"catalog": "", "schema": "staging", "model": "services", "columns": ["patient_id", "patient_name"]},
+    ]
+    assert data["edges"] == [
+        {"source": col("staging", "services", column), "target": col("public", "result", column)}
+        for column in ["patient_id", "patient_name"]
+    ]
+    assert next(c for c in data["columns"] if c["column"] == "version")["text"] == "public.result.version"
+    write(project, "models/result.sql", "SELECT patient_name FROM external.services")
+    assert cll_request().json()["edges"][0]["source"]["schema"] == "external"
+
+
+def test_cll_recursive_branching_and_seeder_boundary(project):
+    write(project, "seeders/import.py", "raise AssertionError('never execute')")
+    # Even invalid Seeder configuration is irrelevant to CLL.
+    write(project, "seeders/import.yaml", "invalid: true")
+    write(project, "models/bronze/clients.sql", "SELECT first_name, last_name, patient_id FROM staging.clients")
+    write(project, "models/silver/clients.sql", "SELECT concat(first_name, ' ', last_name) AS full_name, patient_id FROM bronze.clients")
+    write(project, "models/gold/clients.sql", "SELECT full_name AS patient_name, patient_id FROM silver.clients")
+    response = cll_request(schema="gold", model="clients")
+    assert response.status_code == 200
+    data = response.json()
+    assert {d["schema"] for d in data["datasets"]} == {"staging", "bronze", "silver", "gold"}
+    assert {(e["source"]["schema"], e["source"]["column"], e["target"]["schema"], e["target"]["column"]) for e in data["edges"]} == {
+        ("staging", "first_name", "bronze", "first_name"),
+        ("staging", "last_name", "bronze", "last_name"),
+        ("bronze", "first_name", "silver", "full_name"),
+        ("bronze", "last_name", "silver", "full_name"),
+        ("silver", "full_name", "gold", "patient_name"),
+        ("staging", "patient_id", "bronze", "patient_id"),
+        ("bronze", "patient_id", "silver", "patient_id"),
+        ("silver", "patient_id", "gold", "patient_id"),
+    }
+    texts = {(c["schema"], c["column"]): c["text"] for c in data["columns"]}
+    assert texts["gold", "patient_name"] == """gold.clients.patient_name
+└── silver.clients.full_name
+    ├── bronze.clients.first_name
+    │   └── staging.clients.first_name
+    └── bronze.clients.last_name
+        └── staging.clients.last_name"""
+    assert texts["bronze", "first_name"] == "bronze.clients.first_name\n└── staging.clients.first_name"
+    assert texts["staging", "first_name"] == "staging.clients.first_name"
+    assert "patient_id" not in texts["gold", "patient_name"]
+
+
+def test_cll_missing_model_and_ambiguous_column(project):
+    response = cll_request()
+    assert response.status_code == 404
+    assert "public.result" in response.json()["detail"]
+    write(project, "models/result.sql", "SELECT id AS duplicate, name AS duplicate FROM staging.services")
+    response = cll_request()
+    assert response.status_code == 400
+    assert "public.result.duplicate" in response.json()["detail"]
+    assert "missing or ambiguous" in response.json()["detail"]
+
+
+def test_cll_unknown_star_error(project):
+    write(project, "models/result.sql", "SELECT * FROM external.clients")
+    response = cll_request()
+    assert response.status_code == 400
+    assert "public.result" in response.json()["detail"]
+    assert "metadata" in response.json()["detail"]
+
+
+def test_cll_catalog_dependency_and_exact_selection(project):
+    write(project, "models/result.sql", "SELECT patient_name FROM warehouse.raw.services")
+    data = cll_request().json()
+    assert data["edges"] == [{
+        "source": col("raw", "services", catalog="warehouse"),
+        "target": col("public", "result"),
+    }]
+    assert {"catalog": "warehouse", "schema": "raw", "model": "services", "columns": ["patient_name"]} in data["datasets"]
+    assert cll_request(catalog="warehouse").status_code == 404
+
+
+def test_cll_catalog_model_identity(project, monkeypatch):
+    from rollout.models import Model, ModelId
+
+    selected = Model(ModelId("gold", "a.b", "warehouse"), Path("unused.sql"),
+                     "SELECT patient_name FROM upstream.raw.services")
+    monkeypatch.setattr("tools.viewer.app.discover_models", lambda _: [selected])
+    data = cll_request(catalog="warehouse", schema="gold", model="a.b").json()
+    assert data["root"] == {"catalog": "warehouse", "schema": "gold", "model": "a.b"}
+    assert data["edges"][0]["source"] == col("raw", "services", catalog="upstream")
+
+
+def test_cll_catalog_is_optional_and_column_is_not_required(project):
+    write(project, "models/gold/clients.sql", "SELECT patient_name FROM staging.clients")
+    response = TestClient(app).get("/api/cll", params={"schema": "gold", "model": "clients"})
+    assert response.status_code == 200
+    assert response.json()["root"]["catalog"] == ""
+
+
+@pytest.mark.parametrize("missing", ["schema", "model"])
+def test_cll_requires_model_identity(project, missing):
+    params = dict(schema="public", model="result")
+    del params[missing]
+    assert TestClient(app).get("/api/cll", params=params).status_code == 422
+
+
+def test_cll_model_calendar_generated_from_known_upstream_column(project):
+    write(project, "models/bronze/diagnoses.sql", "SELECT created_time FROM staging.diagnoses")
+    write(project, "models/gold/calendar.sql", """
+        WITH periods AS (
+            SELECT period::DATE AS period FROM generate_series(
+                (SELECT date_trunc('month', min(created_time))::DATE FROM bronze.diagnoses),
+                current_date, INTERVAL 1 MONTH
+            ) AS calendar(period)
+        )
+        SELECT month(period) AS month, year(period) AS year FROM periods
+    """)
+    response = cll_request(schema="gold", model="calendar")
+    assert response.status_code == 200
+    data = response.json()
+    assert next(d for d in data["datasets"] if d["schema"] == "gold")["columns"] == ["month", "year"]
+    assert len(data["datasets"]) == 3
+    assert len(data["edges"]) == 3
+    month = next(c for c in data["columns"] if c["schema"] == "gold" and c["column"] == "month")
+    assert month["text"] == """gold.calendar.month
+└── bronze.diagnoses.created_time
+    └── staging.diagnoses.created_time"""
