@@ -60,6 +60,14 @@ def print_section(title: str) -> None:
 
 
 @app.command()
+def viewer() -> None:
+    """Explore the current project's DAG and column lineage in a browser."""
+    import uvicorn
+
+    uvicorn.run("tools.viewer.app:app", host="127.0.0.1", port=8000)
+
+
+@app.command()
 def dag(
     project_dir: Annotated[
         Path,
