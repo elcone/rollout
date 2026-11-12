@@ -96,7 +96,7 @@ const schemaId = node => JSON.stringify([node.catalog || '', node.schema]);
 const schemaLabel = node => [node.catalog, node.schema].filter(Boolean).join('.');
 const refId = ref => ref.type === 'SEEDER' ? JSON.stringify(['SEEDER', ref.id]) : modelId(ref);
 let activeRun = null, runLoading = false, runError = '', runRequest = 0;
-const runResults = new Map(), runQuality = new Map();
+const runResults = new Map(), runQuality = new Map(), runJobs = new Map();
 const runSelect = document.getElementById('run-selector');
 const RUN_COLORS = {
   SUCCESS: {fill: '#f0fdf4', text: '#166534'},
@@ -107,12 +107,27 @@ const RUN_COLORS = {
 const durationText = value => value == null ? 'Not recorded' : `${value.toFixed(3)} s`;
 const timestampText = value => value == null ? 'Not recorded' : value;
 const runDate = value => new Date(value).toLocaleString(undefined, {timeZoneName: 'short'});
+function qualitySummary(checks = []) {
+  const executed = checks.filter(check => check.status === 'PASS' || check.status === 'FAIL');
+  if (!executed.length) return {text: '', color: '#64748b'};
+  const failed = executed.filter(check => check.status === 'FAIL' && check.severity !== 'WARNING').length;
+  const warnings = executed.filter(check => check.status === 'FAIL' && check.severity === 'WARNING').length;
+  const text = [];
+  if (failed) text.push(`${failed} FAILED`);
+  if (warnings) text.push(`${warnings} ${warnings === 1 ? 'WARNING' : 'WARNINGS'}`);
+  if (!text.length) text.push(`${executed.length}/${executed.length} PASS`);
+  return {text: text.join(' · '), color: failed ? '#b91c1c' : warnings ? '#92400e' : '#64748b'};
+}
 function indexRun(run) {
-  activeRun = run; runResults.clear(); runQuality.clear();
+  activeRun = run; runResults.clear(); runQuality.clear(); runJobs.clear();
   if (!run) return;
   for (const result of run.models) runResults.set(modelId(result), {...result, label: [result.schema, result.name].join('.')});
   for (const result of run.seeders) runResults.set(refId({type: 'SEEDER', id: result.name}), {...result, label: result.name});
   for (const group of run.quality) runQuality.set(modelId(group.model), group.checks);
+  for (const job of run.lineage) {
+    if (job.job_type === 'SEEDER') runJobs.set(refId({type: 'SEEDER', id: job.job_name}), job);
+    for (const output of job.outputs || []) runJobs.set(modelId(output), job);
+  }
 }
 function renderRunSummary() {
   const summary = document.getElementById('run-summary');
@@ -135,16 +150,48 @@ function renderRunSummary() {
     button.onclick = () => { if (viewMode === 'cll') returnToProject(); resetSelection(); };
   }
 }
+function executionCardHeight(id) {
+  if (!activeRun) return 72;
+  return 72 + 28 * (1 + (runResults.get(id)?.duration != null ? 1 : 0) + (qualitySummary(runQuality.get(id)).text ? 1 : 0));
+}
 function applyRunOverlay() {
   if (viewMode !== 'project') return;
+  if ([...cells].some(([id, cell]) => cell.size().height !== executionCardHeight(id))) {
+    renderProjectGraph(false); highlight(selectedId); return;
+  }
   for (const [id, cell] of cells) {
-    const status = activeRun ? runResults.get(id)?.status || 'NO RESULT' : '';
+    const result = runResults.get(id);
+    const status = activeRun ? result?.status || 'NO RESULT' : '';
+    const duration = status && result?.duration != null ? durationText(result.duration) : '';
+    const execution = [status, duration].filter(Boolean).join(' · ');
+    const quality = qualitySummary(runQuality.get(id));
     const colors = RUN_COLORS[status] || RUN_COLORS['NO RESULT'];
-    cell.attr({body: {fill: status ? colors.fill : '#fff'}, title: {y: status ? 29 : 40},
-      executionStatus: {text: status, fill: colors.text}});
+    const qualityColors = Object.values(RUN_COLORS).find(palette => palette.text === quality.color) || RUN_COLORS['NO RESULT'];
+    const rows = [
+      {name: 'status', text: status, colors},
+      {name: 'duration', text: duration, colors: RUN_COLORS['NO RESULT']},
+      {name: 'quality', text: quality.text, colors: qualityColors},
+    ].filter(row => row.text);
+    cell.attr({body: {fill: '#fff'}, icon: {stroke: status ? colors.text : '#2563eb'}, iconBackground: {fill: status ? colors.fill : '#dbeafe'}, title: {y: 40},
+      executionStatus: {text: status}, executionDuration: {text: duration}, qualityStatus: {text: quality.text}});
+    for (const name of ['status', 'duration', 'quality']) {
+      const index = rows.findIndex(row => row.name === name);
+      const row = rows[index], y = 72 + index * 28, width = cell.size().width;
+      const last = index === rows.length - 1, right = width - 1.5, bottom = y + 26.5;
+      const background = last
+        ? `M 1.5 ${y} H ${right} V ${bottom - 8.5} Q ${right} ${bottom} ${right - 8.5} ${bottom} H 10 Q 1.5 ${bottom} 1.5 ${bottom - 8.5} Z`
+        : `M 1.5 ${y} H ${right} V ${y + 28} H 1.5 Z`;
+      const textSelector = name === 'status' ? 'executionStatus' : name === 'duration' ? 'executionDuration' : 'qualityStatus';
+      cell.attr({
+        [`${name}Row`]: {d: background, fill: row?.colors.fill, display: row ? 'inline' : 'none'},
+        [`${name}Separator`]: {x1: 1.5, x2: right, y1: y, y2: y, display: row ? 'inline' : 'none'},
+        [`${name}Bullet`]: {cy: y + 14, fill: row?.colors.text, display: row ? 'inline' : 'none'},
+        [textSelector]: {y: y + 19},
+      });
+    }
     const view = paper.findViewByModel(cell);
     view.el.setAttribute('data-execution-status', status);
-    view.el.setAttribute('aria-label', `${nodes.get(id).label}${status ? ` · ${status}` : ''}`);
+    view.el.setAttribute('aria-label', [nodes.get(id).label, execution, quality.text ? `Quality: ${quality.text}` : ''].filter(Boolean).join(' · '));
   }
 }
 function renderResult(parent, result, checks = []) {
@@ -154,8 +201,8 @@ function renderResult(parent, result, checks = []) {
     ['Started', timestampText(result.started_at)], ['Finished', timestampText(result.finished_at)],
     ['Duration', durationText(result.duration)],
   ];
-  if ('materialization_duration' in result) fields.push(['Materialization', durationText(result.materialization_duration)]);
-  if ('execution_duration' in result) fields.push(['Seeder execution', durationText(result.execution_duration)]);
+  if (result.materialization_duration != null) fields.push(['Materialization', durationText(result.materialization_duration)]);
+  if (result.execution_duration != null) fields.push(['Seeder execution', durationText(result.execution_duration)]);
   for (const [label, value] of fields) {
     element('dt', label, list, 'text-slate-500');
     element('dd', value, list, 'break-words font-mono');
@@ -166,9 +213,21 @@ function renderResult(parent, result, checks = []) {
     for (const check of checks) {
       const block = element('div', null, parent, 'mb-3 rounded border border-slate-300 bg-white p-3 text-xs');
       element('p', `${check.name} · ${check.status} · ${check.severity}`, block, 'break-words font-semibold');
-      element('p', `Observed: ${JSON.stringify(check.observed)} · Expected: ${check.expected}`, block, 'mt-2 break-words');
+      if (check.type != null) element('p', `Type: ${check.type}`, block, 'mt-2 font-mono text-slate-500');
+      element('p', `Observed: ${check.observed == null ? 'Not recorded' : JSON.stringify(check.observed)} · Expected: ${check.expected ?? 'Not recorded'}`, block, 'mt-2 break-words');
       element('p', `Duration: ${durationText(check.duration)}`, block, 'mt-2 text-slate-500');
     }
+  }
+}
+function renderJobLineage(parent, job) {
+  if (!job) return;
+  element('h4', 'Recorded job lineage', parent, 'mb-3 mt-5 text-xs font-semibold');
+  element('p', `${job.job_type} · ${job.job_name}`, parent, 'mb-3 break-words font-mono text-xs text-slate-500');
+  for (const field of ['inputs', 'outputs']) {
+    if (!Array.isArray(job[field])) continue;
+    element('h5', field === 'inputs' ? 'Inputs' : 'Outputs', parent, 'mb-2 mt-3 text-xs font-medium');
+    if (!job[field].length) element('p', 'None recorded.', parent, 'text-xs text-slate-500');
+    for (const ref of job[field]) element('p', [ref.catalog, ref.schema, ref.name].filter(Boolean).join('.'), parent, 'mb-1 break-words font-mono text-xs');
   }
 }
 function renderNodeExecution(id) {
@@ -177,6 +236,7 @@ function renderNodeExecution(id) {
   const result = runResults.get(id);
   if (result) renderResult(block, result, runQuality.get(id));
   else element('p', 'NO RESULT · No result recorded for this node in this execution.', block, 'text-xs text-slate-500');
+  renderJobLineage(block, runJobs.get(id));
 }
 function renderUnmatchedResults() {
   if (!activeRun) return;
@@ -188,6 +248,7 @@ function renderUnmatchedResults() {
     element('summary', `${result.label} · ${result.status}`, details, 'cursor-pointer break-words font-mono text-xs');
     const content = element('div', null, details, 'mt-4');
     renderResult(content, result, runQuality.get(id));
+    renderJobLineage(content, runJobs.get(id));
   }
 }
 async function selectRun(runId) {
@@ -322,9 +383,19 @@ function selectNode(id) {
 }
 function defineCard() {
   return joint.dia.Element.define('lineage.Card', {}, {markup: [
-    {tagName: 'rect', selector: 'body'}, {tagName: 'rect', selector: 'iconBackground'},
+    {tagName: 'rect', selector: 'body'},
+    ...['status', 'duration', 'quality'].flatMap(name => [
+      {tagName: 'path', selector: `${name}Row`},
+      {tagName: 'line', selector: `${name}Separator`},
+    ]),
+    {tagName: 'rect', selector: 'iconBackground'},
     {tagName: 'path', selector: 'icon'}, {tagName: 'text', selector: 'title'},
+    {tagName: 'circle', selector: 'statusBullet'},
+    {tagName: 'circle', selector: 'durationBullet'},
+    {tagName: 'circle', selector: 'qualityBullet'},
     {tagName: 'text', selector: 'executionStatus'},
+    {tagName: 'text', selector: 'executionDuration'},
+    {tagName: 'text', selector: 'qualityStatus'},
   ]});
 }
 function truncateText(text, width, measure) {
@@ -342,12 +413,19 @@ function createNode(id, node, Card) {
   measure.font = `600 14px ${MONOSPACE}`;
   const minWidth = 240, maxWidth = 400;
   const width = Math.ceil(Math.min(maxWidth, Math.max(minWidth, measure.measureText(node.name).width + 92)));
-  const cell = new Card({z: 2, size: {width, height: 72}, attrs: {
+  const cell = new Card({z: 2, size: {width, height: executionCardHeight(id)}, attrs: {
     body: {width: 'calc(w)', height: 'calc(h)', rx: 10, ry: 10, fill: '#fff', stroke: '#b3bfce', strokeWidth: 1},
     iconBackground: {x: 16, y: 16, width: 40, height: 40, rx: 8, fill: '#dbeafe'},
     icon: {d: ICONS[iconKey(node)], transform: 'translate(24 24)', fill: 'none', stroke: '#2563eb', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round'},
     title: {text: truncateText(node.name, width - 88, measure), x: 72, y: 40, fontSize: 14, fontWeight: 600, fontFamily: MONOSPACE, fill: '#0f172a'},
-    executionStatus: {text: '', x: 72, y: 52, fontSize: 10, fontWeight: 600, fontFamily: MONOSPACE},
+    ...Object.fromEntries(['status', 'duration', 'quality'].flatMap(name => [
+      [`${name}Row`, {display: 'none'}],
+      [`${name}Separator`, {stroke: '#e2e8f0', strokeWidth: 0.5, display: 'none'}],
+      [`${name}Bullet`, {cx: 18, r: 3, display: 'none'}],
+    ])),
+    executionStatus: {text: '', x: 30, fontSize: 14, fontWeight: 400, fontFamily: MONOSPACE, fill: '#0f172a'},
+    executionDuration: {text: '', x: 30, fontSize: 14, fontWeight: 400, fontFamily: MONOSPACE, fill: '#0f172a'},
+    qualityStatus: {text: '', x: 30, fontSize: 14, fontWeight: 400, fontFamily: MONOSPACE, fill: '#0f172a'},
   }});
   cells.set(id, cell);
 }
@@ -431,7 +509,7 @@ function continuousLink(source, target, vertices, options) {
   );
   return options.raw ? path : path.serialize();
 }
-function renderProjectGraph() {
+function renderProjectGraph(fit = true) {
   cells.clear(); links.clear();
   const Card = defineCard();
   const namespace = {...joint.shapes, lineage: {Card, Schema: joint.shapes.standard.Rectangle}};
@@ -470,7 +548,7 @@ function renderProjectGraph() {
   }
   for (const cell of graph.getElements()) if (cell.get('type') === 'lineage.Schema') paper.findViewByModel(cell).el.classList.add('schema-container');
   applyRunOverlay(); renderRunSummary();
-  fitGraph();
+  if (fit) fitGraph();
   paper.on('blank:pointerdblclick', () => {
     resetSelection();
     fitGraph();
