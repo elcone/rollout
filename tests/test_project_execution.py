@@ -148,10 +148,10 @@ def test_models_required_and_old_option_removed(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("fails", [False, True])
-def test_seeder_timing_and_cleanup(tmp_path, monkeypatch, fails):
+def test_seeder_timing_and_staging_retention(tmp_path, monkeypatch, fails):
     from rollout import seeders
 
-    marker = tmp_path / "temporary.txt"
+    marker = tmp_path / "staging_path.txt"
     write_seeder(
         tmp_path,
         "source.py",
@@ -166,7 +166,7 @@ def test_seeder_timing_and_cleanup(tmp_path, monkeypatch, fails):
     ticks = iter([10.0, 11.0, 14.0, 20.0])
     monkeypatch.setattr(seeders, "perf_counter", lambda: next(ticks))
     with duckdb.connect() as connection:
-        result = execute_seeder(discover_seeders(tmp_path / "seeders")[0], connection)
+        result = execute_seeder(discover_seeders(tmp_path / "seeders")[0], connection, tmp_path)
     assert result.started_at.utcoffset().total_seconds() == 0
     assert result.finished_at.utcoffset().total_seconds() == 0
     assert result.finished_at >= result.started_at
@@ -182,7 +182,9 @@ def test_seeder_timing_and_cleanup(tmp_path, monkeypatch, fails):
     assert result.status is (
         ExecutionStatus.FAILED if fails else ExecutionStatus.SUCCESS
     )
-    assert not Path(marker.read_text()).exists()
+    directory = Path(marker.read_text())
+    assert directory.is_dir()
+    assert directory == tmp_path / ".rollout" / "source"
     assert list(result.output_models) == (
         [] if fails else [ModelId("staging", "orders")]
     )

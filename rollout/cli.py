@@ -134,7 +134,7 @@ def run(
                 )
             for seeder in seeders:
                 name = seeder.path.relative_to(project_dir).as_posix()
-                seeder_results[name] = execute_seeder(seeder, connection)
+                seeder_results[name] = execute_seeder(seeder, connection, project_dir)
             models = discover_models(project_dir / "models")
             models = parse_models(models)
             dag = build_dag(models)

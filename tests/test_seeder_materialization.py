@@ -1,13 +1,10 @@
-from functools import partial
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from textwrap import indent
 
 import duckdb
 import pytest
 import yaml
 
-from rollout import seeders
 from rollout.discovery import discover_seeders
 from rollout.execution import ExecutionStatus
 from rollout.models import ModelId
@@ -22,11 +19,7 @@ def connection():
 
 
 @pytest.fixture
-def write_seeder(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        seeders, "TemporaryDirectory", partial(TemporaryDirectory, dir=tmp_path)
-    )
-
+def write_seeder(tmp_path):
     def write(body, outputs):
         root = tmp_path / "seeders"
         root.mkdir()
@@ -47,8 +40,10 @@ def write_seeder(tmp_path, monkeypatch):
     return write
 
 
-def assert_cleaned(marker, connection):
-    assert not Path(marker.read_text()).exists()
+def assert_staging_retained_and_views_cleaned(marker, connection):
+    directory = Path(marker.read_text())
+    assert directory.is_dir()
+    assert directory == marker.parent / ".rollout" / "source"
     assert (
         connection.sql(
             "SELECT table_name FROM information_schema.tables WHERE table_type = 'VIEW'"
@@ -64,7 +59,7 @@ def row_count(severity="ERROR", minimum=1):
 def test_parquet_lives_through_materialization_and_quality(
     write_seeder, connection, tmp_path
 ):
-    parquet_glob = str(tmp_path / "rollout-seeder-*" / "orders.parquet")
+    parquet_glob = str(tmp_path / ".rollout" / "source" / "orders.parquet")
     seeder, marker = write_seeder(
         "path = staging_dir / 'orders.parquet'\n"
         "connection.sql('SELECT 1 AS id').write_parquet(str(path))\n"
@@ -82,7 +77,7 @@ def test_parquet_lives_through_materialization_and_quality(
                     },
                     {
                         "type": "custom_sql",
-                        "name": "temporary_parquet_exists",
+                        "name": "staging_parquet_exists",
                         "sql": f"SELECT count(*) FROM read_parquet('{parquet_glob}')",
                         "expectations": [{"operator": "eq", "value": 1}],
                         "severity": "ERROR",
@@ -91,7 +86,7 @@ def test_parquet_lives_through_materialization_and_quality(
             }
         },
     )
-    result = execute_seeder(seeder, connection).output_models[ModelId("staging", "orders")]
+    result = execute_seeder(seeder, connection, marker.parent).output_models[ModelId("staging", "orders")]
     assert result.status is ExecutionStatus.SUCCESS
     assert result.duration is not None
     assert result.materialization_duration is not None
@@ -100,7 +95,7 @@ def test_parquet_lives_through_materialization_and_quality(
     assert len(result.quality_results) == 4
     assert all(check.status is CheckStatus.PASS for check in result.quality_results)
     assert connection.sql("SELECT * FROM staging.orders").fetchall() == [(1,)]
-    assert_cleaned(marker, connection)
+    assert_staging_retained_and_views_cleaned(marker, connection)
 
 
 def test_full_replaces_existing_target_and_preserves_identifier_case(
@@ -113,10 +108,10 @@ def test_full_replaces_existing_target_and_preserves_identifier_case(
         "return {'Mixed\"Name': connection.sql('SELECT 2 AS id')}\n",
         {'Mixed"Name': {}},
     )
-    result = execute_seeder(seeder, connection).output_models[ModelId("staging", 'Mixed"Name')]
+    result = execute_seeder(seeder, connection, marker.parent).output_models[ModelId("staging", 'Mixed"Name')]
     assert result.status is ExecutionStatus.SUCCESS
     assert connection.sql('SELECT * FROM staging."Mixed""Name"').fetchall() == [(2,)]
-    assert_cleaned(marker, connection)
+    assert_staging_retained_and_views_cleaned(marker, connection)
 
 
 @pytest.mark.parametrize("existing_second", [False, True])
@@ -148,7 +143,7 @@ def test_independent_transactions_and_yaml_processing_order(
             },
         },
     )
-    aggregate = execute_seeder(seeder, connection)
+    aggregate = execute_seeder(seeder, connection, marker.parent)
     assert aggregate.status is ExecutionStatus.FAILED
     assert aggregate.error is None
     results = aggregate.output_models
@@ -178,7 +173,7 @@ def test_independent_transactions_and_yaml_processing_order(
             ).fetchall()
             == []
         )
-    assert_cleaned(marker, connection)
+    assert_staging_retained_and_views_cleaned(marker, connection)
 
 
 def test_warning_commits(write_seeder, connection):
@@ -186,11 +181,11 @@ def test_warning_commits(write_seeder, connection):
         "return {'orders': connection.sql('SELECT 1 AS id')}\n",
         {"orders": {"quality": [row_count("WARNING", minimum=2)]}},
     )
-    result = execute_seeder(seeder, connection).output_models[ModelId("staging", "orders")]
+    result = execute_seeder(seeder, connection, marker.parent).output_models[ModelId("staging", "orders")]
     assert result.status is ExecutionStatus.SUCCESS
     assert result.quality_results[0].status is CheckStatus.FAIL
     assert connection.sql("SELECT * FROM staging.orders").fetchall() == [(1,)]
-    assert_cleaned(marker, connection)
+    assert_staging_retained_and_views_cleaned(marker, connection)
 
 
 @pytest.mark.parametrize(
@@ -217,7 +212,7 @@ def test_quality_execution_error_rolls_back_and_continues(
         "'second': connection.sql('SELECT 2 AS id')}\n",
         {"first": {"quality": [check]}, "second": {}},
     )
-    aggregate = execute_seeder(seeder, connection)
+    aggregate = execute_seeder(seeder, connection, marker.parent)
     assert aggregate.status is ExecutionStatus.FAILED
     assert aggregate.error is None
     results = aggregate.output_models
@@ -226,7 +221,7 @@ def test_quality_execution_error_rolls_back_and_continues(
     assert results[ModelId("staging", "second")].status is ExecutionStatus.SUCCESS
     assert connection.sql("SELECT * FROM staging.first").fetchall() == [(99,)]
     assert connection.sql("SELECT * FROM staging.second").fetchall() == [(2,)]
-    assert_cleaned(marker, connection)
+    assert_staging_retained_and_views_cleaned(marker, connection)
 
 
 def test_materialization_error_rolls_back_and_continues(write_seeder, connection):
@@ -241,7 +236,7 @@ def test_materialization_error_rolls_back_and_continues(write_seeder, connection
         "return {'first': relation, 'second': connection.sql('SELECT 2 AS id')}\n",
         {"first": {}, "second": {}},
     )
-    aggregate = execute_seeder(seeder, connection)
+    aggregate = execute_seeder(seeder, connection, marker.parent)
     assert aggregate.status is ExecutionStatus.FAILED
     assert aggregate.error is None
     results = aggregate.output_models
@@ -249,7 +244,7 @@ def test_materialization_error_rolls_back_and_continues(write_seeder, connection
     assert results[ModelId("staging", "second")].status is ExecutionStatus.SUCCESS
     assert connection.sql("SELECT * FROM staging.first").fetchall() == [(99,)]
     assert connection.sql("SELECT * FROM staging.second").fetchall() == [(2,)]
-    assert_cleaned(marker, connection)
+    assert_staging_retained_and_views_cleaned(marker, connection)
 
 
 @pytest.mark.parametrize(
@@ -260,14 +255,14 @@ def test_materialization_error_rolls_back_and_continues(write_seeder, connection
         ("return {'unexpected': connection.sql('SELECT 1')}\n", ValueError),
     ],
 )
-def test_seeder_failure_cleans_temp_and_materializes_nothing(
+def test_seeder_failure_retains_staging_and_materializes_nothing(
     write_seeder, connection, body, cause
 ):
     seeder, marker = write_seeder(body, {"orders": {}})
-    result = execute_seeder(seeder, connection)
+    result = execute_seeder(seeder, connection, marker.parent)
     assert result.status is ExecutionStatus.FAILED
     assert result.output_models == {}
     assert "Seeder execution failed" in result.error
     assert str(seeder.path) in result.error
     assert connection.sql("SELECT * FROM information_schema.tables").fetchall() == []
-    assert_cleaned(marker, connection)
+    assert_staging_retained_and_views_cleaned(marker, connection)
