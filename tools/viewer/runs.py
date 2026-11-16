@@ -75,5 +75,6 @@ def read_runs(project_dir: Path) -> list[dict]:
                     f"Invalid run history at line {line_number}: {exc}"
                 ) from exc
             identifiers.add(document["run_id"])
+            document.setdefault("skip_seeders", False)
             runs.append(document)
     return sorted(runs, key=lambda run: _timestamp(run["started_at"]), reverse=True)

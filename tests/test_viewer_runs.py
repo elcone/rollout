@@ -71,7 +71,7 @@ def test_summary_order_detail_and_fresh_reads(history):
     for run in (older, newer):
         detail = client.get(f"/api/runs/{run['run_id']}")
         assert detail.status_code == 200
-        assert detail.json() == run
+        assert detail.json() == {**run, "skip_seeders": False}
     assert client.get("/api/runs/unknown").status_code == 404
     history.write_text(json.dumps(older))  # A complete final JSON needs no newline.
     assert len(client.get("/api/runs").json()) == 1
@@ -109,3 +109,17 @@ def test_unreadable_history_is_explicit(history):
 def test_invalid_encoding_is_explicit(history):
     history.write_bytes(b"\xff")
     assert TestClient(app).get("/api/runs").status_code == 400
+
+
+@pytest.mark.parametrize("skip_seeders", [None, False, True])
+def test_history_seeder_mode_defaults_and_detail(history, skip_seeders):
+    document = run_document()
+    if skip_seeders is not None:
+        document["skip_seeders"] = skip_seeders
+    history.write_text(json.dumps(document) + "\n")
+    client = TestClient(app)
+    assert client.get("/api/runs").status_code == 200
+    detail = client.get("/api/runs/first")
+    assert detail.status_code == 200
+    assert detail.json()["skip_seeders"] is (skip_seeders is True)
+    assert json.loads(history.read_text()) == document

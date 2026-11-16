@@ -56,6 +56,7 @@ def persist_run_state(
     dag: DAG,
     results: dict[ModelId, ModelResult],
     seeder_results: dict[str, SeederResult],
+    skip_seeders: bool = False,
 ) -> None:
     """Append one complete run document; callers handle non-critical write failures."""
     dataset_results = [
@@ -95,6 +96,7 @@ def persist_run_state(
 
     document = {
         "schema_version": 1,
+        "skip_seeders": skip_seeders,
         "run_id": run_id,
         "started_at": started_at,
         "finished_at": finished_at,

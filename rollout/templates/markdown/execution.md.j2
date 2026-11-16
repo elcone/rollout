@@ -1,6 +1,7 @@
 # Rollout execution
 
 Run ID: {{ run_id }}
+Seeder mode: {{ "skipped" if skip_seeders else "enabled" }}
 Started at: {{ started_at }}
 Finished at: {{ finished_at }}
 Duration: {{ total_duration }}

@@ -138,6 +138,7 @@ def render_execution_markdown(
     finished_at: datetime,
     total_duration: float,
     seeder_results: dict[str, SeederResult] | None = None,
+    skip_seeders: bool = False,
 ) -> str:
     seeder_results = seeder_results or {}
     output_results = {
@@ -238,6 +239,7 @@ def render_execution_markdown(
 
     return _templates.get_template("execution.md.j2").render(
         run_id=run_id,
+        skip_seeders=skip_seeders,
         started_at=started_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
         finished_at=finished_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
         total_duration=f"{total_duration:.2f}s",

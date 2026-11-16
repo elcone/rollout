@@ -75,6 +75,7 @@ def test_cli_state_and_append_only_history(tmp_path, monkeypatch):
         event = events[-1]
         assert set(event) == {
             "schema_version",
+            "skip_seeders",
             "run_id",
             "started_at",
             "finished_at",
@@ -86,6 +87,7 @@ def test_cli_state_and_append_only_history(tmp_path, monkeypatch):
             "quality",
         }
         assert type(event["schema_version"]) is int and event["schema_version"] == 1
+        assert event["skip_seeders"] is False
         start = datetime.fromisoformat(event["started_at"])
         finish = datetime.fromisoformat(event["finished_at"])
         assert start.tzinfo == UTC and finish >= start

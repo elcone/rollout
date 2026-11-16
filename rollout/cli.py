@@ -118,6 +118,13 @@ def run(
             help="Save the execution report here instead of .rollout/runs/.",
         ),
     ] = None,
+    skip_seeders: Annotated[
+        bool,
+        typer.Option(
+            "--skip-seeders",
+            help="Use existing staging without running seeders or downloads.",
+        ),
+    ] = False,
 ) -> None:
     try:
         started_at = datetime.now(UTC)
@@ -126,15 +133,17 @@ def run(
         started = perf_counter()
         seeder_results = {}
         with connect(engine_config) as connection:
-            seeders_dir = project_dir / "seeders"
-            seeders = discover_seeders(seeders_dir) if seeders_dir.exists() else []
-            if not seeders_dir.exists():
-                logger.info(
-                    "No seeders directory at %s; executing zero seeders", seeders_dir
-                )
-            for seeder in seeders:
-                name = seeder.path.relative_to(project_dir).as_posix()
-                seeder_results[name] = execute_seeder(seeder, connection, project_dir)
+            logger.info("Seeder mode: %s", "skipped" if skip_seeders else "enabled")
+            if not skip_seeders:
+                seeders_dir = project_dir / "seeders"
+                seeders = discover_seeders(seeders_dir) if seeders_dir.exists() else []
+                if not seeders_dir.exists():
+                    logger.info(
+                        "No seeders directory at %s; executing zero seeders", seeders_dir
+                    )
+                for seeder in seeders:
+                    name = seeder.path.relative_to(project_dir).as_posix()
+                    seeder_results[name] = execute_seeder(seeder, connection, project_dir)
             models = discover_models(project_dir / "models")
             models = parse_models(models)
             dag = build_dag(models)
@@ -201,6 +210,7 @@ def run(
         finished_at=finished_at,
         total_duration=total_duration,
         seeder_results=seeder_results,
+        skip_seeders=skip_seeders,
     )
     try:
         if output is None:
@@ -227,6 +237,7 @@ def run(
             dag=dag,
             results=results,
             seeder_results=seeder_results,
+            skip_seeders=skip_seeders,
         )
     except OSError as exc:
         logger.warning("Could not persist run state to %s: %s", state_path, exc)

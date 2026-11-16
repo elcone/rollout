@@ -188,3 +188,96 @@ def test_seeder_timing_and_staging_retention(tmp_path, monkeypatch, fails):
     assert list(result.output_models) == (
         [] if fails else [ModelId("staging", "orders")]
     )
+
+
+@pytest.mark.parametrize("skip_seeders", [False, True])
+@pytest.mark.parametrize("failure", [None, "quality", "missing"])
+def test_run_modes_staging_quality_and_history(tmp_path, monkeypatch, skip_seeders, failure):
+    import json
+
+    project = tmp_path / "project"
+    models = project / "models"
+    models.mkdir(parents=True)
+    (models / "orders.sql").write_text("SELECT * FROM staging.orders")
+    (models / "orders.yaml").write_text(
+        yaml.safe_dump({"quality": [{"type": "row_count", "min": 2 if failure == "quality" else 1, "severity": "ERROR"}]})
+    )
+    (models / "report.sql").write_text("SELECT * FROM orders")
+    (models / "independent.sql").write_text("SELECT 1 AS id")
+    marker = project / "download.txt"
+    write_seeder(
+        project,
+        "source.py",
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('downloaded')\n"
+        "return {'orders': connection.sql('SELECT 7 AS id')}",
+        {"orders": {"quality": [{"type": "row_count", "min": 1, "severity": "ERROR"}]}},
+    )
+    monkeypatch.chdir(tmp_path)
+    warehouse = tmp_path / ".rollout" / "warehouse.duckdb"
+    warehouse.parent.mkdir()
+    with duckdb.connect(str(warehouse)) as connection:
+        connection.execute("CREATE SCHEMA staging")
+        if failure != "missing":
+            connection.execute("CREATE TABLE staging.orders AS SELECT 42 AS id")
+    if skip_seeders:
+        # Importing the module or running its output checks must both be avoided.
+        seeder = project / "seeders" / "source.py"
+        seeder.write_text("raise RuntimeError('seeder imported')\n" + seeder.read_text())
+        seeder.with_suffix(".yaml").write_text(
+            yaml.safe_dump({"outputs": {"orders": {"quality": [{"type": "row_count", "min": 999, "severity": "ERROR"}]}}})
+        )
+    args = ["run", "--project-dir", str(project)]
+    if skip_seeders:
+        args.append("--skip-seeders")
+    result = CliRunner().invoke(app, args)
+    fails = failure == "quality" or (skip_seeders and failure == "missing")
+    assert result.exit_code == int(fails), result.output
+    mode = "skipped" if skip_seeders else "enabled"
+    assert f"Seeder mode: {mode}" in result.stderr
+    assert marker.exists() is not skip_seeders
+    assert "🟢 public.independent" in result.stdout
+    if fails:
+        assert "🔴 public.orders" in result.stdout
+        assert "🟡 public.report" in result.stdout
+    else:
+        assert "🟢 public.orders" in result.stdout
+        assert "🟢 public.report" in result.stdout
+    event = json.loads((warehouse.parent / "state.jsonl").read_text())
+    assert event["skip_seeders"] is skip_seeders
+    assert event["status"] == ("FAILED" if fails else "SUCCESS")
+    assert len(event["seeders"]) == (0 if skip_seeders else 1)
+    assert any(job["job_type"] == "SEEDER" for job in event["lineage"]) is not skip_seeders
+    groups = {group["model"]["schema"]: group for group in event["quality"]}
+    assert ("staging" in groups) is not skip_seeders
+    if failure != "missing" or not skip_seeders:
+        assert groups["public"]["checks"][0]["status"] == ("FAIL" if fails else "PASS")
+    else:
+        assert not event["quality"]
+        orders = next(model for model in event["models"] if model["name"] == "orders")
+        assert "orders" in orders["error"]
+    report = (warehouse.parent / "runs" / f"{event['run_id']}.md").read_text()
+    assert f"Seeder mode: {mode}" in report
+    if skip_seeders:
+        assert "seeders/source.py" not in report
+        assert all(model["schema"] != "staging" for model in event["models"])
+        assert not (project / ".rollout").exists()
+    with duckdb.connect(str(warehouse)) as connection:
+        if skip_seeders and failure == "missing":
+            assert connection.sql("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'staging'").fetchone() == (0,)
+        else:
+            assert connection.sql("SELECT * FROM staging.orders").fetchall() == [(42 if skip_seeders else 7,)]
+
+
+def test_skip_seeders_does_not_discover_invalid_configuration(tmp_path, monkeypatch):
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "numbers.sql").write_text("SELECT 1")
+    (tmp_path / "seeders").mkdir()
+    (tmp_path / "seeders" / "source.py").write_text("raise RuntimeError('imported')")
+    (tmp_path / "seeders" / "source.yaml").write_text("outputs: [invalid")
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(app, ["run", "--skip-seeders"])
+    assert result.exit_code == 0, result.output
+    normal = runner.invoke(app, ["run"])
+    assert normal.exit_code == 1
+    assert "Invalid seeder configuration" in normal.stderr
