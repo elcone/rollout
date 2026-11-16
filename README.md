@@ -140,7 +140,25 @@ Empty models, including files containing only comments, are skipped with a warni
 
 ## Python usage
 
-The CLI coordinates the same functions you can call directly from Python:
+`run_project()` executes the complete project using the same orchestration as `rollout run`:
+
+```python
+from rollout import RunResult, run_project
+from rollout.models import ModelId
+
+result: RunResult = run_project("my_project", skip_seeders=True, output="run.md")
+print(result.run_id, result.status.value)
+orders = result.model_results[ModelId("public", "orders")]
+print(orders.status.value, orders.quality_results)
+```
+
+`project_dir` defaults to `"."`; `skip_seeders` defaults to `False`; `output` defaults to the automatic run report. The warehouse remains relative to the current working directory, even when another project directory is selected. Seeder downloads remain under the selected project's `.rollout/` directory.
+
+`RunResult` includes execution timing, `seeder_results`, `model_results`, `report_path`, and `report_error`. Quality results belong to each model result, including seeder `output_models`. Its `status` describes dataset execution only: report write failures populate `report_error` and emit a warning without changing that status. History write failures also emit warnings. Setup and project validation errors propagate as exceptions. The API uses standard logging without configuring it or printing a terminal summary.
+
+With `skip_seeders=True`, seeders and their quality checks are omitted; SQL model checks still run. A missing staging table produces a failed model result and skips its descendants. Reports and history retain the CLI format.
+
+The lower-level components remain available for inspecting or executing model DAGs:
 
 ```python
 from rollout.discovery import discover_models
@@ -154,7 +172,7 @@ models = discover_models("models")
 models = parse_models(models)
 dag = build_dag(models)
 markdown = render_markdown(dag)
-results = execute_models(dag, EngineConfig())
+results = execute_models(dag, EngineConfig(), run_id="example-run")
 ```
 
 Discovery, parsing, DAG construction, and rendering return data without writing output files. `execute_models()` writes the DuckDB warehouse and returns in-memory model results. Model SQL errors become FAILED results; setup and validation errors propagate as exceptions.

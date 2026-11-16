@@ -1,21 +1,17 @@
 import logging
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
-from time import perf_counter
 from typing import Annotated
 
 import duckdb
 import typer
 
-from rollout.config import EngineConfig
 from rollout.dag import build_dag
-from rollout.discovery import discover_models, discover_seeders
-from rollout.execution import ExecutionStatus, connect, execute_models_with_connection
+from rollout.discovery import discover_models
+from rollout.execution import ExecutionStatus
 from rollout.parser import parse_models
-from rollout.renderer import render_execution_markdown, render_markdown
-from rollout.seeders import execute_seeder
-from rollout.state import persist_run_state
+from rollout.api import run_project
+from rollout.renderer import render_markdown
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(
@@ -127,31 +123,9 @@ def run(
     ] = False,
 ) -> None:
     try:
-        started_at = datetime.now(UTC)
-        run_id = started_at.strftime("%Y%m%dT%H%M%S.%fZ")
-        engine_config = EngineConfig()
-        started = perf_counter()
-        seeder_results = {}
-        with connect(engine_config) as connection:
-            logger.info("Seeder mode: %s", "skipped" if skip_seeders else "enabled")
-            if not skip_seeders:
-                seeders_dir = project_dir / "seeders"
-                seeders = discover_seeders(seeders_dir) if seeders_dir.exists() else []
-                if not seeders_dir.exists():
-                    logger.info(
-                        "No seeders directory at %s; executing zero seeders", seeders_dir
-                    )
-                for seeder in seeders:
-                    name = seeder.path.relative_to(project_dir).as_posix()
-                    seeder_results[name] = execute_seeder(seeder, connection, project_dir)
-            models = discover_models(project_dir / "models")
-            models = parse_models(models)
-            dag = build_dag(models)
-            results = execute_models_with_connection(
-                connection, dag, engine_config, run_id
-            )
-        finished_at = datetime.now(UTC)
-        total_duration = perf_counter() - started
+        run_result = run_project(project_dir, skip_seeders=skip_seeders, output=output)
+        seeder_results = run_result.seeder_results
+        results = run_result.model_results
 
     except (ValueError, OSError, duckdb.Error) as exc:
         logger.error("Error: %s", exc)
@@ -198,54 +172,10 @@ def run(
         count = sum(result.status is status for result in all_results)
         typer.secho(f"{count} {label}", fg=colors[status])
 
-    report_path = output
-    if report_path is None:
-        filename = f"{run_id}.md"
-        report_path = engine_config.warehouse_path.parent / "runs" / filename
-    markdown = render_execution_markdown(
-        dag,
-        results,
-        run_id=run_id,
-        started_at=started_at,
-        finished_at=finished_at,
-        total_duration=total_duration,
-        seeder_results=seeder_results,
-        skip_seeders=skip_seeders,
-    )
-    try:
-        if output is None:
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            with report_path.open("x", encoding="utf-8") as report_file:
-                report_file.write(markdown)
-        else:
-            report_path.write_text(markdown, encoding="utf-8")
-        logger.info("Wrote execution report to %s", report_path)
-    except OSError as exc:
-        logger.warning("Could not save execution report to %s: %s", report_path, exc)
-        report_failed = output is not None
-    else:
-        report_failed = False
-
-    state_path = engine_config.warehouse_path.parent / "state.jsonl"
-    try:
-        persist_run_state(
-            state_path,
-            run_id=run_id,
-            started_at=started_at,
-            finished_at=finished_at,
-            total_duration=total_duration,
-            dag=dag,
-            results=results,
-            seeder_results=seeder_results,
-            skip_seeders=skip_seeders,
-        )
-    except OSError as exc:
-        logger.warning("Could not persist run state to %s: %s", state_path, exc)
-
-    if report_failed:
+    if output is not None and run_result.report_error is not None:
         raise typer.Exit(code=1)
 
-    if any(result.status is ExecutionStatus.FAILED for result in all_results):
+    if run_result.status is ExecutionStatus.FAILED:
         raise typer.Exit(code=1)
 
 
